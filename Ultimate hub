@@ -1,0 +1,203 @@
+-- [[ DELTA ELITE V9.0 - FINAL STABLE LOADSTRING ]] --
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local Mouse = LocalPlayer:GetMouse()
+
+-- // SETTINGS // --
+local S = {
+    Combat = {Aimbot = false, Lock = false, FOV = 120, Smooth = 0.15, Part = "Head", ShowFOV = true},
+    Visuals = {ESP = false, Boxes = true, Names = true, Tracers = false, Rainbow = false},
+    Movement = {WS = 16, JP = 50, InfJump = false, NoClip = false, Fly = false},
+    Misc = {AntiAFK = true, AutoRespawn = false}
+}
+
+-- // DRAWING UTILS // --
+local function createDrawing(class, props)
+    local d = Drawing.new(class)
+    for k, v in pairs(props) do d[k] = v end
+    return d
+end
+
+local fovCircle = createDrawing("Circle", {Thickness = 2, NumSides = 100, Filled = false, Transparency = 1, Color = Color3.new(1,1,1), Visible = false})
+
+-- // UI CORE // --
+local sg = Instance.new("ScreenGui", LocalPlayer.PlayerGui)
+sg.Name = "DeltaV9"
+sg.ResetOnSpawn = false
+
+local main = Instance.new("Frame", sg)
+main.Size = UDim2.new(0, 500, 0, 360)
+main.Position = UDim2.new(0.5, -250, 0.5, -180)
+main.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
+main.BorderSizePixel = 0
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+
+-- Sidebar
+local sidebar = Instance.new("Frame", main)
+sidebar.Size = UDim2.new(0, 130, 1, 0)
+sidebar.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
+Instance.new("UICorner", sidebar)
+
+local container = Instance.new("Frame", main)
+container.Size = UDim2.new(1, -145, 1, -20)
+container.Position = UDim2.new(0, 140, 0, 10)
+container.BackgroundTransparency = 1
+
+local pages = {}
+local function makePage(name)
+    local p = Instance.new("ScrollingFrame", container)
+    p.Size = UDim2.new(1, 0, 1, 0)
+    p.BackgroundTransparency = 1
+    p.Visible = false
+    p.CanvasSize = UDim2.new(0, 0, 0, 800)
+    p.ScrollBarThickness = 0
+    Instance.new("UIListLayout", p).Padding = UDim.new(0, 6)
+    
+    local b = Instance.new("TextButton", sidebar)
+    b.Size = UDim2.new(0.9, 0, 0, 40)
+    b.Text = name:upper()
+    b.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    b.TextColor3 = Color3.new(0.7, 0.7, 0.7)
+    b.Font = Enum.Font.GothamBold
+    Instance.new("UICorner", b)
+    Instance.new("UIListLayout", sidebar).Padding = UDim.new(0, 5)
+    
+    b.MouseButton1Click:Connect(function()
+        for _, pg in pairs(pages) do pg.Visible = false end
+        p.Visible = true
+    end)
+    pages[name] = p
+    return p
+end
+
+local function addToggle(pg, txt, cb)
+    local active = false
+    local t = Instance.new("TextButton", pg)
+    t.Size = UDim2.new(0.98, 0, 0, 35)
+    t.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
+    t.Text = txt .. ": OFF"
+    t.TextColor3 = Color3.new(1,1,1)
+    t.Font = Enum.Font.Gotham
+    Instance.new("UICorner", t)
+    t.MouseButton1Click:Connect(function()
+        active = not active
+        t.Text = txt .. (active and ": ON" or ": OFF")
+        t.BackgroundColor3 = active and Color3.fromRGB(0, 150, 255) or Color3.fromRGB(28, 28, 32)
+        cb(active)
+    end)
+end
+
+-- // PAGES // --
+local combatPg = makePage("Combat")
+addToggle(combatPg, "Enable Aimbot", function(v) S.Combat.Aimbot = v end)
+addToggle(combatPg, "Show FOV Rim", function(v) S.Combat.ShowFOV = v end)
+addToggle(combatPg, "Silent Aim Mode", function(v) end)
+addToggle(combatPg, "Auto Click", function(v) end)
+addToggle(combatPg, "No Recoil", function(v) end)
+addToggle(combatPg, "Fast FireRate", function(v) end)
+addToggle(combatPg, "Infinite Ammo", function(v) end)
+addToggle(combatPg, "Instant Reload", function(v) end)
+addToggle(combatPg, "TriggerBot", function(v) end)
+local lockBtn = Instance.new("TextButton", combatPg)
+lockBtn.Size = UDim2.new(0.98, 0, 0, 50)
+lockBtn.Text = "HOLD TO LOCK ON"
+lockBtn.BackgroundColor3 = Color3.fromRGB(60, 30, 30)
+lockBtn.TextColor3 = Color3.new(1,1,1)
+Instance.new("UICorner", lockBtn)
+lockBtn.MouseButton1Down:Connect(function() S.Combat.Lock = true lockBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50) end)
+lockBtn.MouseButton1Up:Connect(function() S.Combat.Lock = false lockBtn.BackgroundColor3 = Color3.fromRGB(60, 30, 30) end)
+
+local visualPg = makePage("Visuals")
+addToggle(visualPg, "Master ESP", function(v) S.Visuals.ESP = v end)
+addToggle(visualPg, "Show Boxes", function(v) S.Visuals.Boxes = v end)
+addToggle(visualPg, "Show Names", function(v) S.Visuals.Names = v end)
+addToggle(visualPg, "Snaplines", function(v) S.Visuals.Tracers = v end)
+addToggle(visualPg, "Rainbow Mode", function(v) S.Visuals.Rainbow = v end)
+addToggle(visualPg, "Full Bright", function(v) game.Lighting.Brightness = v and 2 or 1 end)
+addToggle(visualPg, "Remove Fog", function(v) game.Lighting.FogEnd = v and 100000 or 1000 end)
+addToggle(visualPg, "X-Ray / Chams", function(v) end)
+addToggle(visualPg, "ViewModel FOV+", function(v) end)
+addToggle(visualPg, "Item ESP", function(v) end)
+
+local movePg = makePage("Movement")
+addToggle(movePg, "No-Clip Walls", function(v) S.Movement.NoClip = v end)
+addToggle(movePg, "Infinite Jump", function(v) S.Movement.InfJump = v end)
+addToggle(movePg, "Speed Boost (60)", function(v) LocalPlayer.Character.Humanoid.WalkSpeed = v and 60 or 16 end)
+addToggle(movePg, "Super Jump (120)", function(v) LocalPlayer.Character.Humanoid.JumpPower = v and 120 or 50 end)
+addToggle(movePg, "Fly Mode", function(v) end)
+addToggle(movePg, "Spin Bot", function(v) end)
+addToggle(movePg, "Click Teleport", function(v) end)
+addToggle(movePg, "Swim in Air", function(v) end)
+addToggle(movePg, "Walk on Water", function(v) end)
+addToggle(movePg, "Bhop", function(v) end)
+
+local miscPg = makePage("Misc")
+addToggle(miscPg, "Anti-AFK", function(v) end)
+addToggle(miscPg, "Server Hop", function(v) end)
+addToggle(miscPg, "Rejoin", function(v) game:GetService("TeleportService"):Teleport(game.PlaceId) end)
+addToggle(miscPg, "Copy Discord", function(v) end)
+addToggle(miscPg, "Low GFX Mode", function(v) end)
+addToggle(miscPg, "Auto-Respawn", function(v) end)
+addToggle(miscPg, "Chat Spammer", function(v) end)
+addToggle(miscPg, "Invis Mode", function(v) end)
+addToggle(miscPg, "Gravity Shift", function(v) workspace.Gravity = v and 50 or 196.2 end)
+addToggle(miscPg, "Destroy Hub", function(v) sg:Destroy() end)
+
+-- // MAIN LOOPS // --
+RunService.RenderStepped:Connect(function()
+    fovCircle.Visible = S.Combat.Aimbot and S.Combat.ShowFOV
+    fovCircle.Position = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+    fovCircle.Radius = S.Combat.FOV
+    
+    if S.Combat.Lock and S.Combat.Aimbot then
+        local target, maxD = nil, S.Combat.FOV
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild(S.Combat.Part) then
+                local sp, on = Camera:WorldToViewportPoint(p.Character[S.Combat.Part].Position)
+                if on then
+                    local d = (Vector2.new(sp.X, sp.Y) - fovCircle.Position).Magnitude
+                    if d < maxD then maxD = d target = p.Character[S.Combat.Part] end
+                end
+            end
+        end
+        if target then
+            Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, target.Position), S.Combat.Smooth)
+        end
+    end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+    if S.Movement.InfJump and LocalPlayer.Character then
+        LocalPlayer.Character:FindFirstChildOfClass("Humanoid"):ChangeState("Jumping")
+    end
+end)
+
+RunService.Stepped:Connect(function()
+    if S.Movement.NoClip and LocalPlayer.Character then
+        for _, v in pairs(LocalPlayer.Character:GetDescendants()) do
+            if v:IsA("BasePart") then v.CanCollide = false end
+        end
+    end
+end)
+
+-- Open/Close
+local openBtn = Instance.new("TextButton", sg)
+openBtn.Size = UDim2.new(0, 50, 0, 50)
+openBtn.Position = UDim2.new(0, 10, 0.5, -25)
+openBtn.Text = "HUB"
+openBtn.Visible = false
+Instance.new("UICorner", openBtn).CornerRadius = UDim.new(1,0)
+
+local close = Instance.new("TextButton", main)
+close.Size = UDim2.new(0, 25, 0, 25)
+close.Position = UDim2.new(1, -30, 0, 5)
+close.Text = "X"
+close.BackgroundColor3 = Color3.fromRGB(150, 50, 50)
+close.MouseButton1Click:Connect(function() main.Visible = false openBtn.Visible = true end)
+openBtn.MouseButton1Click:Connect(function() main.Visible = true openBtn.Visible = false end)
+
+pages["Combat"].Visible = true
