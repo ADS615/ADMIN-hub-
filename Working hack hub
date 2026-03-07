@@ -1,0 +1,218 @@
+-- DELTA SCRIPT ARCHITECT: AI MASTER HUB V3 (UPDATED WITH FOV SLIDER)
+-- Optimized for Delta Executor. Targets Players only.
+
+-- SERVICES
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- WAIT FOR GAME LOAD
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+-- INITIAL SETTINGS
+local HUB_SETTINGS = {
+	FOV = 150,
+	WALKSPEED = 32,
+	AIMLOCK = true,
+	TRACERS = true,
+	NOCLIP = false,
+	SMOOTHNESS = 0.2
+}
+
+-- UI CREATION
+local screenGui = Instance.new("ScreenGui", LocalPlayer.PlayerGui)
+screenGui.Name = "AI_Master_Hub_V3"
+screenGui.ResetOnSpawn = false
+
+-- FOV CIRCLE VISUAL
+local fovFrame = Instance.new("Frame", screenGui)
+fovFrame.Name = "FOVCircle"
+fovFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+fovFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+fovFrame.BackgroundTransparency = 1
+fovFrame.Size = UDim2.new(0, HUB_SETTINGS.FOV * 2, 0, HUB_SETTINGS.FOV * 2)
+
+local uiCorner = Instance.new("UICorner", fovFrame)
+uiCorner.CornerRadius = UDim.new(1, 0)
+
+local uiStroke = Instance.new("UIStroke", fovFrame)
+uiStroke.Thickness = 2
+uiStroke.Color = Color3.new(1, 1, 1)
+
+-- TRACER LINE
+local tracerLine = Instance.new("Frame", screenGui)
+tracerLine.AnchorPoint = Vector2.new(0.5, 1)
+tracerLine.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+tracerLine.BorderSizePixel = 0
+tracerLine.Visible = false
+
+-- MAIN HUB PANEL
+local mainFrame = Instance.new("Frame", screenGui)
+mainFrame.Size = UDim2.new(0, 240, 0, 380) -- Increased height for FOV slider
+mainFrame.Position = UDim2.new(0, 20, 0.5, -190)
+mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+mainFrame.BorderSizePixel = 0
+
+local title = Instance.new("TextLabel", mainFrame)
+title.Text = "DELTA PLAYER HUB V3"
+title.Size = UDim2.new(1, 0, 0, 30)
+title.TextColor3 = Color3.fromRGB(0, 200, 255)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBold
+title.TextSize = 18
+
+-- UI BUILDER FUNCTIONS
+local function createSlider(name, min, max, default, position, callback)
+	local label = Instance.new("TextLabel", mainFrame)
+	label.Text = name .. ": " .. default
+	label.Size = UDim2.new(1, 0, 0, 20)
+	label.Position = position
+	label.TextColor3 = Color3.new(0.9, 0.9, 0.9)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.Gotham
+	label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Position = position + UDim2.new(0, 10, 0, 0)
+
+	local sliderBG = Instance.new("Frame", mainFrame)
+	sliderBG.Size = UDim2.new(0.85, 0, 0, 8)
+	sliderBG.Position = position + UDim2.new(0.05, 0, 0, 25)
+	sliderBG.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+
+	local sliderFill = Instance.new("Frame", sliderBG)
+	sliderFill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
+	sliderFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+	sliderFill.BorderSizePixel = 0
+
+	local dragging = false
+	local function update(input)
+		local relativeX = math.clamp((input.Position.X - sliderBG.AbsolutePosition.X) / sliderBG.AbsoluteSize.X, 0, 1)
+		sliderFill.Size = UDim2.new(relativeX, 0, 1, 0)
+		local value = math.floor(min + (relativeX * (max - min)))
+		label.Text = name .. ": " .. value
+		callback(value)
+	end
+
+	sliderBG.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true update(input) end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then update(input) end
+	end)
+end
+
+local function createToggle(name, default, position, settingKey)
+	local btn = Instance.new("TextButton", mainFrame)
+	btn.Size = UDim2.new(0.9, 0, 0, 30)
+	btn.Position = position + UDim2.new(0.05, 0, 0, 0)
+	btn.BackgroundColor3 = default and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(150, 0, 0)
+	btn.Text = name .. ": " .. (default and "ON" or "OFF")
+	btn.TextColor3 = Color3.new(1, 1, 1)
+	btn.Font = Enum.Font.GothamBold
+	btn.BorderSizePixel = 0
+
+	btn.MouseButton1Click:Connect(function()
+		HUB_SETTINGS[settingKey] = not HUB_SETTINGS[settingKey]
+		btn.BackgroundColor3 = HUB_SETTINGS[settingKey] and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(150, 0, 0)
+		btn.Text = name .. ": " .. (HUB_SETTINGS[settingKey] and "ON" or "OFF")
+	end)
+end
+
+-- INITIALIZE UI CONTROLS
+createSlider("FOV Radius", 50, 600, HUB_SETTINGS.FOV, UDim2.new(0, 0, 0, 40), function(val)
+	HUB_SETTINGS.FOV = val
+	fovFrame.Size = UDim2.new(0, val * 2, 0, val * 2)
+end)
+
+createSlider("Walk Speed", 16, 200, HUB_SETTINGS.WALKSPEED, UDim2.new(0, 0, 0, 90), function(val)
+	HUB_SETTINGS.WALKSPEED = val
+end)
+
+createToggle("Aimlock", HUB_SETTINGS.AIMLOCK, UDim2.new(0, 0, 0, 150), "AIMLOCK")
+createToggle("Show Tracers", HUB_SETTINGS.TRACERS, UDim2.new(0, 0, 0, 190), "TRACERS")
+createToggle("Noclip", HUB_SETTINGS.NOCLIP, UDim2.new(0, 0, 0, 230), "NOCLIP")
+
+-- CORE LOGIC: PLAYER-ONLY TARGETING
+local function getTargetPlayer()
+	local closest, shortestDist = nil, HUB_SETTINGS.FOV
+	local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+	for _, player in pairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character then
+			local root = player.Character:FindFirstChild("HumanoidRootPart")
+			local hum = player.Character:FindFirstChildOfClass("Humanoid")
+			
+			if root and hum and hum.Health > 0 then
+				local screenPos, onScreen = Camera:WorldToViewportPoint(root.Position)
+				if onScreen then
+					local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+					if dist < shortestDist then
+						shortestDist, closest = dist, root
+					end
+				end
+			end
+		end
+	end
+	return closest
+end
+
+-- MAIN LOOP
+RunService.RenderStepped:Connect(function()
+	pcall(function()
+		local char = LocalPlayer.Character
+		if char and char:FindFirstChildOfClass("Humanoid") then
+			char:FindFirstChildOfClass("Humanoid").WalkSpeed = HUB_SETTINGS.WALKSPEED
+			
+			if HUB_SETTINGS.NOCLIP then
+				for _, part in pairs(char:GetDescendants()) do
+					if part:IsA("BasePart") then part.CanCollide = false end
+				end
+			end
+		end
+
+		local target = getTargetPlayer()
+
+		-- AIMLOCK
+		if target and HUB_SETTINGS.AIMLOCK then
+			local lookAt = CFrame.new(Camera.CFrame.Position, target.Position)
+			Camera.CFrame = Camera.CFrame:Lerp(lookAt, HUB_SETTINGS.SMOOTHNESS)
+			uiStroke.Color = Color3.fromRGB(255, 0, 0)
+		else
+			uiStroke.Color = Color3.fromRGB(255, 255, 255)
+		end
+
+        -- TRACERS
+        if target and HUB_SETTINGS.TRACERS then
+            local screenPos, onScreen = Camera:WorldToViewportPoint(target.Position)
+            if onScreen then
+                local startPos = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                local endPos = Vector2.new(screenPos.X, screenPos.Y)
+                tracerLine.Size = UDim2.new(0, 2, 0, (endPos - startPos).Magnitude)
+                tracerLine.Position = UDim2.new(0, startPos.X, 0, startPos.Y)
+                tracerLine.Rotation = math.deg(math.atan2(endPos.Y - startPos.Y, endPos.X - startPos.X)) + 90
+                tracerLine.Visible = true
+            else
+                tracerLine.Visible = false
+            end
+        else
+            tracerLine.Visible = false
+        end
+
+		-- HIGHLIGHTS
+		for _, player in pairs(Players:GetPlayers()) do
+			if player ~= LocalPlayer and player.Character then
+				local highlight = player.Character:FindFirstChild("PlayerHighlight") or Instance.new("Highlight", player.Character)
+				highlight.Name = "PlayerHighlight"
+				highlight.Enabled = HUB_SETTINGS.TRACERS
+				highlight.FillColor = (target and target.Parent == player.Character) and Color3.new(1,0,0) or Color3.new(0,1,1)
+				highlight.FillTransparency = 0.5
+			end
+		end
+	end)
+end)
