@@ -1,0 +1,573 @@
+-- Admin Hub (Mobile + PC) by Claude
+-- Features: Aimbot, Fly, Silent Aim, Infinite Ammo
+-- Full mobile touch support + keyboard support
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+local Camera = Workspace.CurrentCamera
+
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+
+-- Detect mobile
+local IsMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+-- =============================================
+-- STATE
+-- =============================================
+local State = {
+    AimbotEnabled = false,
+    FlyEnabled = false,
+    SilentAimEnabled = false,
+    InfiniteAmmoEnabled = false,
+    FlySpeed = 50,
+    AimbotFOV = 150,
+    BodyVelocity = nil,
+    BodyGyro = nil,
+    -- Mobile fly joystick state
+    FlyJoyActive = false,
+    FlyJoyCenter = Vector2.new(0, 0),
+    FlyJoyDelta = Vector2.new(0, 0),
+    FlyJoyTouchId = nil,
+    -- GUI drag state
+    DragActive = false,
+    DragOffset = Vector2.new(0, 0),
+    -- Aimbot (mobile = auto, PC = hold Q)
+    AimbotHolding = false,
+}
+
+-- =============================================
+-- GUI SETUP
+-- =============================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AdminHub"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.Parent = gethui and gethui() or LocalPlayer:WaitForChild("PlayerGui")
+
+-- Main Frame
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 320, 0, 410)
+MainFrame.Position = UDim2.new(0.5, -160, 0.5, -205)
+MainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Parent = ScreenGui
+
+local GlowBorder = Instance.new("UIStroke")
+GlowBorder.Color = Color3.fromRGB(180, 0, 255)
+GlowBorder.Thickness = 2
+GlowBorder.Parent = MainFrame
+
+local Corner = Instance.new("UICorner")
+Corner.CornerRadius = UDim.new(0, 10)
+Corner.Parent = MainFrame
+
+-- Top bar
+local TopBar = Instance.new("Frame")
+TopBar.Size = UDim2.new(1, 0, 0, 44)
+TopBar.BackgroundColor3 = Color3.fromRGB(20, 0, 40)
+TopBar.BorderSizePixel = 0
+TopBar.Parent = MainFrame
+
+local TopCorner = Instance.new("UICorner")
+TopCorner.CornerRadius = UDim.new(0, 10)
+TopCorner.Parent = TopBar
+
+local TopGrad = Instance.new("UIGradient")
+TopGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(130, 0, 210)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(40, 0, 80)),
+})
+TopGrad.Rotation = 90
+TopGrad.Parent = TopBar
+
+local Title = Instance.new("TextLabel")
+Title.Text = "âš¡ ADMIN HUB"
+Title.Size = UDim2.new(1, -60, 1, 0)
+Title.Position = UDim2.new(0, 14, 0, 0)
+Title.BackgroundTransparency = 1
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 15
+Title.Font = Enum.Font.GothamBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = TopBar
+
+-- Platform badge
+local PlatBadge = Instance.new("TextLabel")
+PlatBadge.Text = IsMobile and "ðŸ“± MOBILE" or "ðŸ–¥ PC"
+PlatBadge.Size = UDim2.new(0, 70, 0, 20)
+PlatBadge.Position = UDim2.new(1, -78, 0.5, -10)
+PlatBadge.BackgroundColor3 = Color3.fromRGB(60, 0, 100)
+PlatBadge.TextColor3 = Color3.fromRGB(200, 150, 255)
+PlatBadge.TextSize = 10
+PlatBadge.Font = Enum.Font.GothamBold
+PlatBadge.BorderSizePixel = 0
+PlatBadge.Parent = TopBar
+
+local PBC = Instance.new("UICorner")
+PBC.CornerRadius = UDim.new(1, 0)
+PBC.Parent = PlatBadge
+
+-- Subtitle
+local Sub = Instance.new("TextLabel")
+Sub.Text = "by Claude"
+Sub.Size = UDim2.new(1, 0, 0, 14)
+Sub.Position = UDim2.new(0, 0, 0, 46)
+Sub.BackgroundTransparency = 1
+Sub.TextColor3 = Color3.fromRGB(130, 70, 190)
+Sub.TextSize = 11
+Sub.Font = Enum.Font.Gotham
+Sub.TextXAlignment = Enum.TextXAlignment.Center
+Sub.Parent = MainFrame
+
+-- Scroll frame
+local ScrollFrame = Instance.new("ScrollingFrame")
+ScrollFrame.Size = UDim2.new(1, -16, 1, -104)
+ScrollFrame.Position = UDim2.new(0, 8, 0, 64)
+ScrollFrame.BackgroundTransparency = 1
+ScrollFrame.BorderSizePixel = 0
+ScrollFrame.ScrollBarThickness = IsMobile and 4 or 3
+ScrollFrame.ScrollBarImageColor3 = Color3.fromRGB(150, 0, 255)
+ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+ScrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+ScrollFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+ScrollFrame.Parent = MainFrame
+
+local ListLayout = Instance.new("UIListLayout")
+ListLayout.Padding = UDim.new(0, 7)
+ListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ListLayout.Parent = ScrollFrame
+
+-- =============================================
+-- TOUCH DRAG (Mobile GUI dragging)
+-- =============================================
+TopBar.Active = true
+
+TopBar.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.Touch or
+       inp.UserInputType == Enum.UserInputType.MouseButton1 then
+        State.DragActive = true
+        local mfPos = MainFrame.AbsolutePosition
+        State.DragOffset = Vector2.new(
+            inp.Position.X - mfPos.X,
+            inp.Position.Y - mfPos.Y
+        )
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(inp)
+    if State.DragActive then
+        if inp.UserInputType == Enum.UserInputType.Touch or
+           inp.UserInputType == Enum.UserInputType.MouseMovement then
+            local vp = Camera.ViewportSize
+            local nx = inp.Position.X - State.DragOffset.X
+            local ny = inp.Position.Y - State.DragOffset.Y
+            nx = math.clamp(nx, 0, vp.X - MainFrame.AbsoluteSize.X)
+            ny = math.clamp(ny, 0, vp.Y - MainFrame.AbsoluteSize.Y)
+            MainFrame.Position = UDim2.new(0, nx, 0, ny)
+        end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.Touch or
+       inp.UserInputType == Enum.UserInputType.MouseButton1 then
+        State.DragActive = false
+    end
+end)
+
+-- =============================================
+-- TOGGLE FACTORY
+-- =============================================
+local function CreateToggle(name, icon, description, order, callback)
+    local ToggleFrame = Instance.new("Frame")
+    ToggleFrame.Size = UDim2.new(1, 0, 0, 62)
+    ToggleFrame.BackgroundColor3 = Color3.fromRGB(18, 5, 30)
+    ToggleFrame.BorderSizePixel = 0
+    ToggleFrame.LayoutOrder = order
+    ToggleFrame.Parent = ScrollFrame
+
+    local TCorner = Instance.new("UICorner")
+    TCorner.CornerRadius = UDim.new(0, 8)
+    TCorner.Parent = ToggleFrame
+
+    local TStroke = Instance.new("UIStroke")
+    TStroke.Color = Color3.fromRGB(55, 0, 90)
+    TStroke.Thickness = 1
+    TStroke.Parent = ToggleFrame
+
+    local IconLabel = Instance.new("TextLabel")
+    IconLabel.Text = icon
+    IconLabel.Size = UDim2.new(0, 34, 0, 34)
+    IconLabel.Position = UDim2.new(0, 10, 0.5, -17)
+    IconLabel.BackgroundTransparency = 1
+    IconLabel.TextColor3 = Color3.fromRGB(200, 100, 255)
+    IconLabel.TextSize = 20
+    IconLabel.Font = Enum.Font.GothamBold
+    IconLabel.Parent = ToggleFrame
+
+    local NameLabel = Instance.new("TextLabel")
+    NameLabel.Text = name
+    NameLabel.Size = UDim2.new(1, -108, 0, 20)
+    NameLabel.Position = UDim2.new(0, 52, 0, 11)
+    NameLabel.BackgroundTransparency = 1
+    NameLabel.TextColor3 = Color3.fromRGB(240, 240, 240)
+    NameLabel.TextSize = 13
+    NameLabel.Font = Enum.Font.GothamBold
+    NameLabel.TextXAlignment = Enum.TextXAlignment.Left
+    NameLabel.Parent = ToggleFrame
+
+    local DescLabel = Instance.new("TextLabel")
+    DescLabel.Text = description
+    DescLabel.Size = UDim2.new(1, -108, 0, 16)
+    DescLabel.Position = UDim2.new(0, 52, 0, 33)
+    DescLabel.BackgroundTransparency = 1
+    DescLabel.TextColor3 = Color3.fromRGB(115, 75, 155)
+    DescLabel.TextSize = 10
+    DescLabel.Font = Enum.Font.Gotham
+    DescLabel.TextXAlignment = Enum.TextXAlignment.Left
+    DescLabel.Parent = ToggleFrame
+
+    -- Pill toggle
+    local PillBG = Instance.new("Frame")
+    PillBG.Size = UDim2.new(0, 48, 0, 26)
+    PillBG.Position = UDim2.new(1, -56, 0.5, -13)
+    PillBG.BackgroundColor3 = Color3.fromRGB(40, 10, 60)
+    PillBG.BorderSizePixel = 0
+    PillBG.Parent = ToggleFrame
+
+    local PillCorner = Instance.new("UICorner")
+    PillCorner.CornerRadius = UDim.new(1, 0)
+    PillCorner.Parent = PillBG
+
+    local PillCircle = Instance.new("Frame")
+    PillCircle.Size = UDim2.new(0, 20, 0, 20)
+    PillCircle.Position = UDim2.new(0, 3, 0.5, -10)
+    PillCircle.BackgroundColor3 = Color3.fromRGB(110, 55, 170)
+    PillCircle.BorderSizePixel = 0
+    PillCircle.Parent = PillBG
+
+    local CCircle = Instance.new("UICorner")
+    CCircle.CornerRadius = UDim.new(1, 0)
+    CCircle.Parent = PillCircle
+
+    local enabled = false
+
+    local function SetState(state)
+        enabled = state
+        local pos = state and UDim2.new(1, -23, 0.5, -10) or UDim2.new(0, 3, 0.5, -10)
+        local bg  = state and Color3.fromRGB(155, 0, 255) or Color3.fromRGB(40, 10, 60)
+        local cir = state and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(110, 55, 170)
+        local stk = state and Color3.fromRGB(155, 0, 255) or Color3.fromRGB(55, 0, 90)
+        TweenService:Create(PillCircle, TweenInfo.new(0.18), {Position = pos, BackgroundColor3 = cir}):Play()
+        TweenService:Create(PillBG, TweenInfo.new(0.18), {BackgroundColor3 = bg}):Play()
+        TweenService:Create(TStroke, TweenInfo.new(0.18), {Color = stk}):Play()
+        callback(state)
+    end
+
+    -- Works on both touch and mouse click
+    local Btn = Instance.new("TextButton")
+    Btn.Size = UDim2.new(1, 0, 1, 0)
+    Btn.BackgroundTransparency = 1
+    Btn.Text = ""
+    Btn.Parent = ToggleFrame
+    Btn.MouseButton1Click:Connect(function()
+        SetState(not enabled)
+    end)
+
+    return SetState
+end
+
+-- =============================================
+-- UTILITY: Get Closest Player
+-- =============================================
+local function GetClosestPlayer()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return nil end
+    local closest, closestDist = nil, math.huge
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local head = plr.Character:FindFirstChild("Head")
+            local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+            if head and hum and hum.Health > 0 then
+                local sp, onScreen = Camera:WorldToViewportPoint(head.Position)
+                if onScreen then
+                    local vp = Camera.ViewportSize
+                    local dx = sp.X - vp.X / 2
+                    local dy = sp.Y - vp.Y / 2
+                    local dist = math.sqrt(dx*dx + dy*dy)
+                    if dist < State.AimbotFOV and dist < closestDist then
+                        closestDist = dist
+                        closest = plr
+                    end
+                end
+            end
+        end
+    end
+    return closest
+end
+
+-- =============================================
+-- AIMBOT
+-- Mobile: auto-aim always active when enabled
+-- PC: hold Q
+-- =============================================
+local AimbotConn
+CreateToggle("Aimbot", "ðŸŽ¯",
+    IsMobile and "Auto-aims at nearest player" or "Hold Q to lock-on",
+    1, function(on)
+    State.AimbotEnabled = on
+    if on then
+        AimbotConn = RunService.RenderStepped:Connect(function()
+            local shouldAim = IsMobile or UserInputService:IsKeyDown(Enum.KeyCode.Q)
+            if not shouldAim then return end
+            local target = GetClosestPlayer()
+            if not target or not target.Character then return end
+            local head = target.Character:FindFirstChild("Head")
+            if not head then return end
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, head.Position)
+        end)
+    else
+        if AimbotConn then AimbotConn:Disconnect() AimbotConn = nil end
+    end
+end)
+
+-- =============================================
+-- FLY
+-- Mobile: on-screen joystick + up/down buttons
+-- PC: WASD + Space + Ctrl
+-- =============================================
+local FlyConn
+
+-- Mobile fly controls UI (created when fly is toggled on mobile)
+local FlyControlsFrame = nil
+
+local function CreateMobileFlyControls()
+    if FlyControlsFrame then FlyControlsFrame:Destroy() end
+
+    FlyControlsFrame = Instance.new("Frame")
+    FlyControlsFrame.Name = "FlyControls"
+    FlyControlsFrame.Size = UDim2.new(0, 160, 0, 160)
+    FlyControlsFrame.Position = UDim2.new(0, 20, 1, -200)
+    FlyControlsFrame.BackgroundTransparency = 1
+    FlyControlsFrame.Parent = ScreenGui
+
+    -- Joystick base
+    local JoyBase = Instance.new("Frame")
+    JoyBase.Name = "JoyBase"
+    JoyBase.Size = UDim2.new(0, 110, 0, 110)
+    JoyBase.Position = UDim2.new(0, 0, 0, 0)
+    JoyBase.BackgroundColor3 = Color3.fromRGB(30, 0, 55)
+    JoyBase.BackgroundTransparency = 0.3
+    JoyBase.BorderSizePixel = 0
+    JoyBase.Parent = FlyControlsFrame
+
+    local JBC = Instance.new("UICorner")
+    JBC.CornerRadius = UDim.new(1, 0)
+    JBC.Parent = JoyBase
+
+    local JBStroke = Instance.new("UIStroke")
+    JBStroke.Color = Color3.fromRGB(130, 0, 200)
+    JBStroke.Thickness = 2
+    JBStroke.Parent = JoyBase
+
+    -- Joystick knob
+    local JoyKnob = Instance.new("Frame")
+    JoyKnob.Name = "JoyKnob"
+    JoyKnob.Size = UDim2.new(0, 44, 0, 44)
+    JoyKnob.Position = UDim2.new(0.5, -22, 0.5, -22)
+    JoyKnob.BackgroundColor3 = Color3.fromRGB(170, 0, 255)
+    JoyKnob.BorderSizePixel = 0
+    JoyKnob.Parent = JoyBase
+
+    local JKC = Instance.new("UICorner")
+    JKC.CornerRadius = UDim.new(1, 0)
+    JKC.Parent = JoyKnob
+
+    -- Up button
+    local UpBtn = Instance.new("TextButton")
+    UpBtn.Size = UDim2.new(0, 44, 0, 44)
+    UpBtn.Position = UDim2.new(0, 116, 0, 0)
+    UpBtn.BackgroundColor3 = Color3.fromRGB(30, 0, 55)
+    UpBtn.BackgroundTransparency = 0.3
+    UpBtn.Text = "â–²"
+    UpBtn.TextColor3 = Color3.fromRGB(200, 100, 255)
+    UpBtn.TextSize = 18
+    UpBtn.Font = Enum.Font.GothamBold
+    UpBtn.BorderSizePixel = 0
+    UpBtn.Parent = FlyControlsFrame
+
+    local UBC = Instance.new("UICorner")
+    UBC.CornerRadius = UDim.new(0, 8)
+    UBC.Parent = UpBtn
+
+    -- Down button
+    local DownBtn = Instance.new("TextButton")
+    DownBtn.Size = UDim2.new(0, 44, 0, 44)
+    DownBtn.Position = UDim2.new(0, 116, 0, 50)
+    DownBtn.BackgroundColor3 = Color3.fromRGB(30, 0, 55)
+    DownBtn.BackgroundTransparency = 0.3
+    DownBtn.Text = "â–¼"
+    DownBtn.TextColor3 = Color3.fromRGB(200, 100, 255)
+    DownBtn.TextSize = 18
+    DownBtn.Font = Enum.Font.GothamBold
+    DownBtn.BorderSizePixel = 0
+    DownBtn.Parent = FlyControlsFrame
+
+    local DBC = Instance.new("UICorner")
+    DBC.CornerRadius = UDim.new(0, 8)
+    DBC.Parent = DownBtn
+
+    -- Up/Down state
+    local GoUp, GoDown = false, false
+    UpBtn.MouseButton1Down:Connect(function() GoUp = true end)
+    UpBtn.MouseButton1Up:Connect(function() GoUp = false end)
+    DownBtn.MouseButton1Down:Connect(function() GoDown = true end)
+    DownBtn.MouseButton1Up:Connect(function() GoDown = false end)
+
+    -- Touch joystick logic
+    local joyRadius = 55 -- pixels from center
+    local joyCenter = Vector2.new(0, 0)
+    local joyDelta = Vector2.new(0, 0)
+    local joyTouchId = nil
+
+    JoyBase.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.Touch and not joyTouchId then
+            joyTouchId = inp
+            joyCenter = JoyBase.AbsolutePosition + JoyBase.AbsoluteSize / 2
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(inp)
+        if inp == joyTouchId then
+            local delta = Vector2.new(inp.Position.X - joyCenter.X, inp.Position.Y - joyCenter.Y)
+            local len = delta.Magnitude
+            if len > joyRadius then
+                delta = delta / len * joyRadius
+            end
+            joyDelta = delta / joyRadius
+            JoyKnob.Position = UDim2.new(0.5, delta.X - 22, 0.5, delta.Y - 22)
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(inp)
+        if inp == joyTouchId then
+            joyTouchId = nil
+            joyDelta = Vector2.new(0, 0)
+            TweenService:Create(JoyKnob, TweenInfo.new(0.1), {
+                Position = UDim2.new(0.5, -22, 0.5, -22)
+            }):Play()
+        end
+    end)
+
+    -- Return delta accessors
+    return function()
+        return joyDelta, GoUp, GoDown
+    end
+end
+
+local GetMobileInput = nil
+
+local function EnableFly()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum then return end
+
+    hum.PlatformStand = true
+
+    local BV = Instance.new("BodyVelocity")
+    BV.Velocity = Vector3.zero
+    BV.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+    BV.Parent = root
+    State.BodyVelocity = BV
+
+    local BG = Instance.new("BodyGyro")
+    BG.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+    BG.P = 1e4
+    BG.CFrame = root.CFrame
+    BG.Parent = root
+    State.BodyGyro = BG
+
+    if IsMobile then
+        GetMobileInput = CreateMobileFlyControls()
+    end
+
+    FlyConn = RunService.RenderStepped:Connect(function()
+        local cf = Camera.CFrame
+        local vel = Vector3.zero
+        local spd = State.FlySpeed
+
+        if IsMobile and GetMobileInput then
+            local delta, goUp, goDown = GetMobileInput()
+            -- Forward/back from joystick Y, strafe from joystick X
+            vel = vel + cf.LookVector * (-delta.Y * spd)
+            vel = vel + cf.RightVector * (delta.X * spd)
+            if goUp   then vel = vel + Vector3.new(0, spd, 0) end
+            if goDown then vel = vel - Vector3.new(0, spd, 0) end
+        else
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then vel = vel + cf.LookVector * spd end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then vel = vel - cf.LookVector * spd end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then vel = vel - cf.RightVector * spd end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then vel = vel + cf.RightVector * spd end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space)       then vel = vel + Vector3.new(0, spd, 0) end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then vel = vel - Vector3.new(0, spd, 0) end
+        end
+
+        BV.Velocity = vel
+        BG.CFrame = cf
+    end)
+end
+
+local function DisableFly()
+    local char = LocalPlayer.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.PlatformStand = false end
+    end
+    if State.BodyVelocity then State.BodyVelocity:Destroy() State.BodyVelocity = nil end
+    if State.BodyGyro then State.BodyGyro:Destroy() State.BodyGyro = nil end
+    if FlyConn then FlyConn:Disconnect() FlyConn = nil end
+    if FlyControlsFrame then FlyControlsFrame:Destroy() FlyControlsFrame = nil end
+    GetMobileInput = nil
+end
+
+CreateToggle("Fly", "ðŸš€",
+    IsMobile and "Joystick to move | â–²â–¼ for altitude" or "WASD | Space up | Ctrl down",
+    2, function(on)
+    State.FlyEnabled = on
+    if on then
+        if not LocalPlayer.Character then LocalPlayer.CharacterAdded:Wait() end
+        EnableFly()
+    else
+        DisableFly()
+    end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    if State.FlyEnabled then EnableFly() end
+end)
+
+-- =============================================
+-- SILENT AIM
+-- =============================================
+local SilentAimHook
+CreateToggle("Silent Aim", "ðŸ‘",
+    "Redirects shots to nearest enemy head",
+    3, function(on)
+    State.SilentAimEnabled = on
+    if on then
+        SilentAimHook = RunService.RenderStepped:Connect(function()
+            local target = GetClosestPlayer()
+            if not target or not target.Character then return end
+            loca
