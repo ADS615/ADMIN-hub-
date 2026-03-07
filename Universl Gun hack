@@ -1,0 +1,243 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Ensure game is fully loaded
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+-- Utility for drawing vector-based graphics
+local function nd(class, props)
+    local d = Drawing.new(class)
+    for k, v in pairs(props) do d[k] = v end
+    return d
+end
+
+-- Filter to target only real players (excludes local player and NPCs)
+local function getTargets()
+    local targets = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            table.insert(targets, p.Character)
+        end
+    end
+    return targets
+end
+
+-- ESP Module Logic
+local ESP = (function()
+    local M = {}
+    M.Config = {
+        Enabled = false,
+        MaxDistance = 1000,
+        ShowName = true,
+        ShowHealth = true,
+        ShowDistance = true,
+        ShowBox = true,
+        BoxColor = Color3.fromRGB(80, 200, 255),
+        NameColor = Color3.fromRGB(255, 255, 255),
+        HealthColor = Color3.fromRGB(0, 255, 0),
+        LowHealthColor = Color3.fromRGB(255, 60, 60),
+        TextSize = 14,
+    }
+
+    local drawings = {}
+
+    local function getOrCreate(char)
+        if drawings[char] then return drawings[char] end
+        local cfg = M.Config
+        local d = { box = {} }
+        for i = 1, 4 do d.box[i] = nd("Line", {Color = cfg.BoxColor, Thickness = 1, Visible = false}) end
+        d.name = nd("Text", {Color = cfg.NameColor, Size = cfg.TextSize, Center = true, Outline = true, Visible = false})
+        d.health = nd("Text", {Color = cfg.HealthColor, Size = cfg.TextSize - 2, Center = true, Outline = true, Visible = false})
+        d.dist = nd("Text", {Color = Color3.fromRGB(200, 200, 200), Size = cfg.TextSize - 2, Center = true, Outline = true, Visible = false})
+        drawings[char] = d
+        return d
+    end
+
+    local function hideAll()
+        for _, d in pairs(drawings) do
+            for _, l in ipairs(d.box) do l.Visible = false end
+            d.name.Visible = false d.health.Visible = false d.dist.Visible = false
+        end
+    end
+
+    RunService.RenderStepped:Connect(function()
+        if not M.Config.Enabled then hideAll() return end
+        local cfg = M.Config
+        local lpChar = LocalPlayer.Character
+        local lpHrp = lpChar and lpChar:FindFirstChild("HumanoidRootPart")
+        local currentDrawings = {}
+
+        for _, char in ipairs(getTargets()) do
+            pcall(function()
+                currentDrawings[char] = true
+                local root = char:FindFirstChild("HumanoidRootPart")
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if not root or not hum or hum.Health <= 0 then return end
+
+                local dist = lpHrp and (lpHrp.Position - root.Position).Magnitude or 0
+                local sp, on = Camera:WorldToViewportPoint(root.Position)
+
+                local d = getOrCreate(char)
+                if dist > cfg.MaxDistance or not on then
+                    for _, l in ipairs(d.box) do l.Visible = false end
+                    d.name.Visible = false d.health.Visible = false d.dist.Visible = false
+                    return
+                end
+
+                local size = (Camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0)).Y - Camera:WorldToViewportPoint(root.Position + Vector3.new(0, 2.6, 0)).Y)
+                local width = size / 2
+                local x, y = sp.X, sp.Y
+
+                if cfg.ShowBox then
+                    d.box[1].From = Vector2.new(x - width, y - size / 2) d.box[1].To = Vector2.new(x + width, y - size / 2)
+                    d.box[2].From = Vector2.new(x - width, y + size / 2) d.box[2].To = Vector2.new(x + width, y + size / 2)
+                    d.box[3].From = Vector2.new(x - width, y - size / 2) d.box[3].To = Vector2.new(x - width, y + size / 2)
+                    d.box[4].From = Vector2.new(x + width, y - size / 2) d.box[4].To = Vector2.new(x + width, y + size / 2)
+                    for i = 1, 4 do d.box[i].Visible = true end
+                end
+
+                if cfg.ShowName then
+                    local player = Players:GetPlayerFromCharacter(char)
+                    d.name.Text = player and player.Name or "Player"
+                    d.name.Position = Vector2.new(x, y - size / 2 - 15)
+                    d.name.Visible = true
+                end
+
+                if cfg.ShowHealth then
+                    d.health.Text = math.floor(hum.Health) .. " HP"
+                    d.health.Position = Vector2.new(x, y + size / 2 + 2)
+                    d.health.Color = hum.Health > 50 and cfg.HealthColor or cfg.LowHealthColor
+                    d.health.Visible = true
+                end
+            end)
+        end
+
+        for char, d in pairs(drawings) do
+            if not currentDrawings[char] then
+                for _, l in ipairs(d.box) do l:Remove() end
+                d.name:Remove() d.health:Remove() d.dist:Remove()
+                drawings[char] = nil
+            end
+        end
+    end)
+    return M
+end)()
+
+-- Aimbot Module Logic
+local Aimbot = (function()
+    local M = {}
+    M.Config = {
+        Enabled = false,
+        FOVRadius = 120,
+        Smoothness = 0.1,
+        AimPart = "Head",
+        ShowFOV = true,
+        FOVColor = Color3.fromRGB(255, 255, 255)
+    }
+
+    local fovCircle = nd("Circle", {Thickness = 1, NumSides = 64, Visible = false})
+
+    local function getClosestToCenter()
+        local bestTarget = nil
+        local maxDist = M.Config.FOVRadius
+        local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+        for _, char in ipairs(getTargets()) do
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local part = char:FindFirstChild(M.Config.AimPart)
+            if hum and hum.Health > 0 and part then
+                local sp, on = Camera:WorldToViewportPoint(part.Position)
+                if on then
+                    local screenPos = Vector2.new(sp.X, sp.Y)
+                    local dist = (screenPos - center).Magnitude
+                    if dist < maxDist then
+                        maxDist = dist
+                        bestTarget = part
+                    end
+                end
+            end
+        end
+        return bestTarget
+    end
+
+    RunService.RenderStepped:Connect(function()
+        if not M.Config.Enabled then
+            fovCircle.Visible = false
+            return
+        end
+
+        local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        fovCircle.Position = center
+        fovCircle.Radius = M.Config.FOVRadius
+        fovCircle.Visible = M.Config.ShowFOV
+        fovCircle.Color = M.Config.FOVColor
+
+        -- Lock-on logic tied to Right Mouse Button
+        if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+            pcall(function()
+                local target = getClosestToCenter()
+                if target then
+                    local lookCF = CFrame.new(Camera.CFrame.Position, target.Position)
+                    Camera.CFrame = Camera.CFrame:Lerp(lookCF, M.Config.Smoothness)
+                end
+            end)
+        end
+    end)
+
+    return M
+end)()
+
+-- Hub UI Implementation
+local screenGui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
+screenGui.Name = "PlayerHub"
+screenGui.ResetOnSpawn = false
+
+local main = Instance.new("Frame", screenGui)
+main.Size = UDim2.new(0, 200, 0, 150)
+main.Position = UDim2.new(0.5, -100, 0.5, -75)
+main.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+main.BorderSizePixel = 0
+Instance.new("UICorner", main)
+
+local title = Instance.new("TextLabel", main)
+title.Size = UDim2.new(1, 0, 0, 30)
+title.Text = "PLAYER HUB V2"
+title.TextColor3 = Color3.new(1, 1, 1)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBold
+
+local function createToggle(name, pos, callback)
+    local btn = Instance.new("TextButton", main)
+    btn.Size = UDim2.new(0.8, 0, 0, 30)
+    btn.Position = pos
+    btn.Text = name .. ": OFF"
+    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.Font = Enum.Font.Gotham
+    Instance.new("UICorner", btn)
+
+    local enabled = false
+    btn.MouseButton1Click:Connect(function()
+        enabled = not enabled
+        btn.Text = name .. (enabled and ": ON" or ": OFF")
+        btn.BackgroundColor3 = enabled and Color3.fromRGB(80, 200, 80) or Color3.fromRGB(40, 40, 40)
+        callback(enabled)
+    end)
+end
+
+createToggle("Player ESP", UDim2.new(0.1, 0, 0.3, 0), function(v) ESP.Config.Enabled = v end)
+createToggle("Aimbot (Hold RClick)", UDim2.new(0.1, 0, 0.6, 0), function(v) Aimbot.Config.Enabled = v end)
+
+-- UI Visibility Control
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if not gpe and input.KeyCode == Enum.KeyCode.RightShift then
+        main.Visible = not main.Visible
+    end
+end)
