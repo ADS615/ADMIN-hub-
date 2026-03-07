@@ -1,0 +1,610 @@
+-- ============================================================
+--  NPC AI HUB  v2.0
+--  Scripts:
+--    [1] NPC ESP     – boxes, health, distance, state, LOS
+--    [2] NPC Aimbot  – FOV circle (centre screen), locks onto
+--                      the closest NPC head inside the circle
+-- ============================================================
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService     = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
+local Camera      = workspace.CurrentCamera
+
+-- ============================================================
+--  SHARED UTILITY
+-- ============================================================
+local function nd(class, props)
+    local d = Drawing.new(class)
+    for k,v in pairs(props) do d[k]=v end
+    return d
+end
+
+local function getNPCs()
+    local npcs, pm = {}, {}
+    for _,p in ipairs(Players:GetPlayers()) do
+        if p.Character then pm[p.Character] = true end
+    end
+    for _,obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and not pm[obj] and obj:FindFirstChildOfClass("Humanoid") then
+            table.insert(npcs, obj)
+        end
+    end
+    return npcs
+end
+
+-- ============================================================
+--  MODULE 1 – NPC ESP
+-- ============================================================
+local ESP = (function()
+    local M = {}
+    M.Config = {
+        Enabled        = false,
+        MaxDistance    = 200,
+        ShowName       = true,
+        ShowHealth     = true,
+        ShowDistance   = true,
+        ShowState      = true,
+        ShowBox        = true,
+        ShowTracers    = false,
+        ShowLOS        = true,
+        TextSize       = 14,
+        BoxColor       = Color3.fromRGB(255,255,255),
+        NameColor      = Color3.fromRGB(255,255,255),
+        HealthColor    = Color3.fromRGB(0,255,0),
+        LowHealthColor = Color3.fromRGB(255,60,60),
+        TracerColor    = Color3.fromRGB(255,255,0),
+        LOSColor       = Color3.fromRGB(255,50,50),
+        StateColors    = {
+            Idle   = Color3.fromRGB(150,150,255),
+            Patrol = Color3.fromRGB(100,220,100),
+            Alert  = Color3.fromRGB(255,200,50),
+            Chase  = Color3.fromRGB(255,140,0),
+            Attack = Color3.fromRGB(255,50,50),
+            Dead   = Color3.fromRGB(120,120,120),
+        },
+    }
+
+    local drawings = {}
+
+    local function getOrCreate(npc)
+        if drawings[npc] then return drawings[npc] end
+        local cfg = M.Config
+        local d   = { box = {} }
+        for i=1,4 do d.box[i]=nd("Line",{Color=cfg.BoxColor,Thickness=1,Visible=false}) end
+        d.name   = nd("Text",{Color=cfg.NameColor,  Size=cfg.TextSize,  Center=true,Outline=true,Visible=false})
+        d.health = nd("Text",{Color=cfg.HealthColor,Size=cfg.TextSize-2,Center=true,Outline=true,Visible=false})
+        d.dist   = nd("Text",{Color=Color3.fromRGB(200,200,200),Size=cfg.TextSize-2,Center=true,Outline=true,Visible=false})
+        d.state  = nd("Text",{Color=Color3.fromRGB(150,150,255),Size=cfg.TextSize-2,Center=true,Outline=true,Visible=false})
+        d.tracer = nd("Line",{Color=cfg.TracerColor,Thickness=1,Visible=false})
+        drawings[npc] = d
+        return d
+    end
+
+    local function hideAll()
+        for _,d in pairs(drawings) do
+            for _,l in ipairs(d.box) do l.Visible=false end
+            d.name.Visible=false d.health.Visible=false
+            d.dist.Visible=false d.state.Visible=false d.tracer.Visible=false
+        end
+    end
+
+    local function getCorners(cf,size)
+        local h,c = size/2,{}
+        for _,sx in ipairs({-1,1}) do for _,sy in ipairs({-1,1}) do for _,sz in ipairs({-1,1}) do
+            table.insert(c, cf:PointToWorldSpace(Vector3.new(sx*h.X,sy*h.Y,sz*h.Z)))
+        end end end
+        return c
+    end
+
+    local function getBounds(corners)
+        local x1,y1,x2,y2 = math.huge,math.huge,-math.huge,-math.huge
+        for _,wp in ipairs(corners) do
+            local sp,on = Camera:WorldToViewportPoint(wp)
+            if not on then return nil end
+            if sp.X<x1 then x1=sp.X end if sp.Y<y1 then y1=sp.Y end
+            if sp.X>x2 then x2=sp.X end if sp.Y>y2 then y2=sp.Y end
+        end
+        return x1,y1,x2,y2
+    end
+
+    local function drawRect(lines,x1,y1,x2,y2,col)
+        lines[1].From=Vector2.new(x1,y1) lines[1].To=Vector2.new(x2,y1) lines[1].Color=col lines[1].Visible=true
+        lines[2].From=Vector2.new(x1,y2) lines[2].To=Vector2.new(x2,y2) lines[2].Color=col lines[2].Visible=true
+        lines[3].From=Vector2.new(x1,y1) lines[3].To=Vector2.new(x1,y2) lines[3].Color=col lines[3].Visible=true
+        lines[4].From=Vector2.new(x2,y1) lines[4].To=Vector2.new(x2,y2) lines[4].Color=col lines[4].Visible=true
+    end
+
+    local function getState(npc)
+        local a = npc:GetAttribute("AIState")
+        if a then return tostring(a) end
+        local sv = npc:FindFirstChild("AIState")
+        if sv and sv:IsA("StringValue") then return sv.Value end
+        local h = npc:FindFirstChildOfClass("Humanoid")
+        if h and h.Health<=0 then return "Dead" end
+        return "Idle"
+    end
+
+    local function checkLOS(npc)
+        local char = LocalPlayer.Character if not char then return false end
+        local hrp  = char:FindFirstChild("HumanoidRootPart") if not hrp then return false end
+        local root = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart if not root then return false end
+        local dir  = hrp.Position - root.Position
+        local hit  = workspace:FindPartOnRayWithIgnoreList(Ray.new(root.Position,dir.Unit*dir.Magnitude),{npc,char})
+        return hit==nil
+    end
+
+    RunService.RenderStepped:Connect(function()
+        if not M.Config.Enabled then hideAll() return end
+        local cfg  = M.Config
+        local char = LocalPlayer.Character
+        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+        local live = {}
+
+        for _,npc in ipairs(getNPCs()) do
+            live[npc]=true
+            local root = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart or npc:FindFirstChildOfClass("BasePart")
+            if not root then continue end
+            local dist   = hrp and (hrp.Position-root.Position).Magnitude or math.huge
+            local sp,on  = Camera:WorldToViewportPoint(root.Position)
+            local d      = getOrCreate(npc)
+            if dist>cfg.MaxDistance or not on then
+                for _,l in ipairs(d.box) do l.Visible=false end
+                d.name.Visible=false d.health.Visible=false d.dist.Visible=false
+                d.state.Visible=false d.tracer.Visible=false
+                continue
+            end
+            local los    = cfg.ShowLOS and checkLOS(npc)
+            local boxCol = los and cfg.LOSColor or cfg.BoxColor
+            local x1,y1,x2,y2 = getBounds(getCorners(root.CFrame,root.Size))
+            if x1 then
+                drawRect(d.box,x1,y1,x2,y2,boxCol)
+                local cx,yo = (x1+x2)/2, y1-4
+                if cfg.ShowName then
+                    d.name.Text=npc.Name d.name.Position=Vector2.new(cx,yo) d.name.Visible=true
+                    yo=yo-d.name.TextBounds.Y-2
+                else d.name.Visible=false end
+                local hum = npc:FindFirstChildOfClass("Humanoid")
+                if cfg.ShowHealth and hum then
+                    local pct=math.clamp(hum.Health/hum.MaxHealth,0,1)
+                    d.health.Text=string.format("HP %d/%d",hum.Health,hum.MaxHealth)
+                    d.health.Color=pct>0.5 and cfg.HealthColor or cfg.LowHealthColor
+                    d.health.Position=Vector2.new(cx,yo) d.health.Visible=true
+                    yo=yo-d.health.TextBounds.Y-2
+                else d.health.Visible=false end
+                if cfg.ShowDistance then
+                    d.dist.Text=string.format("%.1f studs",dist)
+                    d.dist.Position=Vector2.new(cx,y2+2) d.dist.Visible=true
+                else d.dist.Visible=false end
+                if cfg.ShowState then
+                    local st=getState(npc)
+                    d.state.Text="["..st.."]"
+                    d.state.Color=cfg.StateColors[st] or Color3.new(1,1,1)
+                    d.state.Position=Vector2.new(cx,y2+14) d.state.Visible=true
+                else d.state.Visible=false end
+            else
+                for _,l in ipairs(d.box) do l.Visible=false end
+                d.name.Visible=false d.health.Visible=false d.dist.Visible=false d.state.Visible=false
+            end
+            if cfg.ShowTracers then
+                local vp=Camera.ViewportSize
+                d.tracer.From=Vector2.new(vp.X/2,vp.Y) d.tracer.To=Vector2.new(sp.X,sp.Y)
+                d.tracer.Color=los and cfg.LOSColor or cfg.TracerColor d.tracer.Visible=true
+            else d.tracer.Visible=false end
+        end
+
+        for npc,d in pairs(drawings) do
+            if not live[npc] then
+                for _,l in ipairs(d.box) do l:Remove() end
+                d.name:Remove() d.health:Remove() d.dist:Remove() d.state:Remove() d.tracer:Remove()
+                drawings[npc]=nil
+            end
+        end
+    end)
+
+    return M
+end)()
+
+-- ============================================================
+--  MODULE 2 – NPC AIMBOT  (FOV circle + smooth head tracking)
+-- ============================================================
+local Aimbot = (function()
+    local M = {}
+    M.Config = {
+        Enabled        = false,
+        FOVRadius      = 120,       -- pixels radius of the FOV circle
+        Smoothness     = 0.15,      -- lerp factor per frame (lower = smoother but slower)
+        AimPart        = "Head",    -- "Head" or "HumanoidRootPart"
+        MaxDistance    = 300,       -- max stud range
+        ShowFOV        = true,      -- draw the white/red circle
+        ShowLockLine   = true,      -- draw a line from centre to locked head
+        FOVIdle        = Color3.fromRGB(255,255,255),   -- circle colour when nobody locked
+        FOVLocked      = Color3.fromRGB(255,60,60),     -- circle colour when locked
+        LockLineColor  = Color3.fromRGB(255,60,60),
+    }
+
+    -- ── FOV circle (64 line segments) ────────────────────────
+    local SEG = 64
+    local fovLines = {}
+    for i = 1, SEG do
+        fovLines[i] = nd("Line", { Color=M.Config.FOVIdle, Thickness=1.2, Visible=false })
+    end
+
+    -- Lock-on line  (centre → target head)
+    local lockLine = nd("Line", { Color=M.Config.LockLineColor, Thickness=1.2, Visible=false })
+
+    -- Small dot at exact screen centre
+    local dot = nd("Circle", { Color=Color3.fromRGB(255,60,60), Filled=true, Thickness=0, Radius=3, Visible=false })
+
+    local lockedTarget = nil  -- current NPC being tracked
+
+    -- ── Helpers ──────────────────────────────────────────────
+    local function screenCentre()
+        local vp = Camera.ViewportSize
+        return Vector2.new(vp.X/2, vp.Y/2)
+    end
+
+    local function drawCircle(centre, radius, col)
+        for i = 1, SEG do
+            local a1 = (i-1)/SEG * math.pi*2
+            local a2 =  i   /SEG * math.pi*2
+            fovLines[i].From    = Vector2.new(centre.X + math.cos(a1)*radius, centre.Y + math.sin(a1)*radius)
+            fovLines[i].To      = Vector2.new(centre.X + math.cos(a2)*radius, centre.Y + math.sin(a2)*radius)
+            fovLines[i].Color   = col
+            fovLines[i].Visible = true
+        end
+        dot.Position = centre
+        dot.Visible  = true
+    end
+
+    local function hideCircle()
+        for _,l in ipairs(fovLines) do l.Visible=false end
+        lockLine.Visible = false
+        dot.Visible      = false
+    end
+
+    local function getHeadScreen(npc)
+        local part = npc:FindFirstChild(M.Config.AimPart)
+            or npc:FindFirstChild("HumanoidRootPart")
+            or npc.PrimaryPart
+        if not part then return nil end
+        local sp, on = Camera:WorldToViewportPoint(part.Position)
+        if not on then return nil end
+        return Vector2.new(sp.X, sp.Y), part
+    end
+
+    local function worldDist(npc)
+        local char = LocalPlayer.Character
+        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+        local root = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
+        if not hrp or not root then return math.huge end
+        return (hrp.Position - root.Position).Magnitude
+    end
+
+    local function isAlive(npc)
+        local h = npc:FindFirstChildOfClass("Humanoid")
+        return h and h.Health > 0
+    end
+
+    -- ── Render loop ───────────────────────────────────────────
+    RunService.RenderStepped:Connect(function()
+        if not M.Config.Enabled then
+            hideCircle()
+            lockedTarget = nil
+            return
+        end
+
+        local cfg    = M.Config
+        local centre = screenCentre()
+        local radius = cfg.FOVRadius
+
+        -- Drop lock if target died / removed
+        if lockedTarget then
+            if not lockedTarget.Parent or not isAlive(lockedTarget) then
+                lockedTarget = nil
+            end
+        end
+
+        -- Scan NPCs – find the one closest to screen centre that's inside FOV
+        local bestNPC, bestDist = nil, math.huge
+        for _, npc in ipairs(getNPCs()) do
+            if not isAlive(npc) then continue end
+            if worldDist(npc) > cfg.MaxDistance then continue end
+            local sp = getHeadScreen(npc)
+            if not sp then continue end
+            local d2d = (sp - centre).Magnitude
+            if d2d <= radius and d2d < bestDist then
+                bestDist = d2d
+                bestNPC  = npc
+            end
+        end
+
+        -- Update lock
+        if bestNPC then
+            lockedTarget = bestNPC
+        end
+
+        -- ── Draw FOV circle ───────────────────────────────────
+        if cfg.ShowFOV then
+            drawCircle(centre, radius, lockedTarget and cfg.FOVLocked or cfg.FOVIdle)
+        else
+            for _,l in ipairs(fovLines) do l.Visible=false end
+            dot.Visible = false
+        end
+
+        -- ── Aim at locked target ──────────────────────────────
+        if lockedTarget then
+            local sp, part = getHeadScreen(lockedTarget)
+            if sp and part then
+                -- Draw lock line
+                if cfg.ShowLockLine then
+                    lockLine.From    = centre
+                    lockLine.To      = sp
+                    lockLine.Color   = cfg.LockLineColor
+                    lockLine.Visible = true
+                else
+                    lockLine.Visible = false
+                end
+
+                -- Smooth camera lerp toward the head
+                local lookCF = CFrame.new(Camera.CFrame.Position, part.Position)
+                Camera.CFrame = Camera.CFrame:Lerp(lookCF, cfg.Smoothness)
+            else
+                -- Off screen – release lock
+                lockedTarget     = nil
+                lockLine.Visible = false
+            end
+        else
+            lockLine.Visible = false
+        end
+    end)
+
+    function M:ReleaseLock() lockedTarget = nil end
+    return M
+end)()
+
+-- ============================================================
+--  HUB  –  Script registry
+-- ============================================================
+local Hub = {
+    Scripts = {
+        { name = "NPC ESP",    icon = "👁",  module = ESP,    enabled = false },
+        { name = "NPC Aimbot", icon = "🎯",  module = Aimbot, enabled = false },
+        -- future slots go here:
+        -- { name = "AI Trainer", icon = "🧠", module = TrainModule, enabled = false },
+    }
+}
+
+-- Accent colours per row (matches icon vibe)
+local ROW_ACCENTS = {
+    Color3.fromRGB(80,200,255),   -- ESP  – cyan
+    Color3.fromRGB(255,80,80),    -- Aimbot – red
+    Color3.fromRGB(160,100,255),  -- slot 3
+    Color3.fromRGB(80,255,160),   -- slot 4
+}
+
+-- ============================================================
+--  GUI
+-- ============================================================
+local WINDOW_W = 292
+local WINDOW_H = 70 + (#Hub.Scripts * 64) + 28
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name           = "NPC_AI_Hub"
+screenGui.ResetOnSpawn   = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent         = PlayerGui
+
+-- ── Window frame ─────────────────────────────────────────────
+local window = Instance.new("Frame")
+window.Name             = "Window"
+window.Size             = UDim2.new(0,WINDOW_W,0,WINDOW_H)
+window.Position         = UDim2.new(0.5,-WINDOW_W/2,0.5,-WINDOW_H/2)
+window.BackgroundColor3 = Color3.fromRGB(10,10,15)
+window.BorderSizePixel  = 0
+window.ClipsDescendants = true
+window.Parent           = screenGui
+Instance.new("UICorner",window).CornerRadius = UDim.new(0,12)
+local stroke = Instance.new("UIStroke",window)
+stroke.Color=Color3.fromRGB(80,200,255) stroke.Thickness=1.5 stroke.Transparency=0.5
+
+-- ── Top bar ──────────────────────────────────────────────────
+local topBar = Instance.new("Frame",window)
+topBar.Size             = UDim2.new(1,0,0,40)
+topBar.BackgroundColor3 = Color3.fromRGB(15,15,22)
+topBar.BorderSizePixel  = 0
+Instance.new("UICorner",topBar).CornerRadius = UDim.new(0,12)
+-- flatten bottom corners
+local tbFill = Instance.new("Frame",topBar)
+tbFill.Size=UDim2.new(1,0,0,12) tbFill.Position=UDim2.new(0,0,1,-12)
+tbFill.BackgroundColor3=Color3.fromRGB(15,15,22) tbFill.BorderSizePixel=0
+
+-- Cyan left stripe
+local stripe = Instance.new("Frame",topBar)
+stripe.Size=UDim2.new(0,3,0.65,0) stripe.Position=UDim2.new(0,10,0.175,0)
+stripe.BackgroundColor3=Color3.fromRGB(80,200,255) stripe.BorderSizePixel=0
+Instance.new("UICorner",stripe).CornerRadius=UDim.new(0,2)
+
+local titleLbl = Instance.new("TextLabel",topBar)
+titleLbl.Text="  NPC AI HUB" titleLbl.Font=Enum.Font.GothamBold titleLbl.TextSize=15
+titleLbl.TextColor3=Color3.fromRGB(80,200,255) titleLbl.BackgroundTransparency=1
+titleLbl.Size=UDim2.new(1,-50,1,0) titleLbl.Position=UDim2.new(0,18,0,0)
+titleLbl.TextXAlignment=Enum.TextXAlignment.Left
+
+local minBtn = Instance.new("TextButton",topBar)
+minBtn.Text="—" minBtn.Font=Enum.Font.GothamBold minBtn.TextSize=16
+minBtn.TextColor3=Color3.fromRGB(130,130,150) minBtn.BackgroundColor3=Color3.fromRGB(28,28,42)
+minBtn.Size=UDim2.new(0,28,0,22) minBtn.Position=UDim2.new(1,-36,0.5,-11)
+minBtn.BorderSizePixel=0
+Instance.new("UICorner",minBtn).CornerRadius=UDim.new(0,6)
+
+-- ── Section label ────────────────────────────────────────────
+local secLbl = Instance.new("TextLabel",window)
+secLbl.Text="SCRIPTS" secLbl.Font=Enum.Font.GothamBold secLbl.TextSize=10
+secLbl.TextColor3=Color3.fromRGB(70,170,220) secLbl.BackgroundTransparency=1
+secLbl.Size=UDim2.new(1,-28,0,16) secLbl.Position=UDim2.new(0,14,0,48)
+secLbl.TextXAlignment=Enum.TextXAlignment.Left
+
+local divLine = Instance.new("Frame",window)
+divLine.Size=UDim2.new(1,-28,0,1) divLine.Position=UDim2.new(0,14,0,65)
+divLine.BackgroundColor3=Color3.fromRGB(32,32,50) divLine.BorderSizePixel=0
+
+-- ── Scroll list ───────────────────────────────────────────────
+local scroll = Instance.new("ScrollingFrame",window)
+scroll.Size=UDim2.new(1,-10,1,-82) scroll.Position=UDim2.new(0,5,0,70)
+scroll.BackgroundTransparency=1 scroll.BorderSizePixel=0
+scroll.ScrollBarThickness=4 scroll.ScrollBarImageColor3=Color3.fromRGB(80,200,255)
+scroll.AutomaticCanvasSize=Enum.AutomaticSize.Y scroll.CanvasSize=UDim2.new(0,0,0,0)
+
+local layout = Instance.new("UIListLayout",scroll)
+layout.SortOrder=Enum.SortOrder.LayoutOrder layout.Padding=UDim.new(0,8)
+
+local lpad = Instance.new("UIPadding",scroll)
+lpad.PaddingTop=UDim.new(0,4) lpad.PaddingBottom=UDim.new(0,8)
+lpad.PaddingLeft=UDim.new(0,4) lpad.PaddingRight=UDim.new(0,4)
+
+-- ── Row factory ───────────────────────────────────────────────
+local function createRow(entry, idx)
+    local accent = ROW_ACCENTS[idx] or Color3.fromRGB(200,200,200)
+
+    local row = Instance.new("Frame",scroll)
+    row.Name=entry.name row.Size=UDim2.new(1,0,0,56)
+    row.BackgroundColor3=Color3.fromRGB(17,17,26) row.BorderSizePixel=0
+    row.LayoutOrder=idx
+    Instance.new("UICorner",row).CornerRadius=UDim.new(0,9)
+
+    -- left accent bar
+    local bar = Instance.new("Frame",row)
+    bar.Size=UDim2.new(0,3,0.65,0) bar.Position=UDim2.new(0,8,0.175,0)
+    bar.BackgroundColor3=accent bar.BorderSizePixel=0
+    Instance.new("UICorner",bar).CornerRadius=UDim.new(0,3)
+
+    -- icon
+    local icon = Instance.new("TextLabel",row)
+    icon.Text=entry.icon or "•" icon.Font=Enum.Font.GothamBold icon.TextSize=22
+    icon.BackgroundTransparency=1 icon.Size=UDim2.new(0,32,1,0)
+    icon.Position=UDim2.new(0,18,0,0) icon.TextXAlignment=Enum.TextXAlignment.Center
+
+    -- name label
+    local nameLbl = Instance.new("TextLabel",row)
+    nameLbl.Text=entry.name nameLbl.Font=Enum.Font.GothamBold nameLbl.TextSize=13
+    nameLbl.TextColor3=Color3.fromRGB(220,220,235) nameLbl.BackgroundTransparency=1
+    nameLbl.Size=UDim2.new(1,-100,0,20) nameLbl.Position=UDim2.new(0,56,0,9)
+    nameLbl.TextXAlignment=Enum.TextXAlignment.Left
+
+    -- status label
+    local statusLbl = Instance.new("TextLabel",row)
+    statusLbl.Text="Disabled" statusLbl.Font=Enum.Font.Gotham statusLbl.TextSize=11
+    statusLbl.TextColor3=Color3.fromRGB(90,90,110) statusLbl.BackgroundTransparency=1
+    statusLbl.Size=UDim2.new(1,-100,0,14) statusLbl.Position=UDim2.new(0,56,0,30)
+    statusLbl.TextXAlignment=Enum.TextXAlignment.Left
+
+    -- pill background
+    local pill = Instance.new("Frame",row)
+    pill.Size=UDim2.new(0,50,0,26) pill.Position=UDim2.new(1,-62,0.5,-13)
+    pill.BackgroundColor3=Color3.fromRGB(30,30,46) pill.BorderSizePixel=0
+    Instance.new("UICorner",pill).CornerRadius=UDim.new(1,0)
+
+    -- pill knob
+    local knob = Instance.new("Frame",pill)
+    knob.Size=UDim2.new(0,20,0,20) knob.Position=UDim2.new(0,3,0.5,-10)
+    knob.BackgroundColor3=Color3.fromRGB(90,90,110) knob.BorderSizePixel=0
+    Instance.new("UICorner",knob).CornerRadius=UDim.new(1,0)
+
+    -- invisible click catcher
+    local btn = Instance.new("TextButton",row)
+    btn.Size=UDim2.new(1,0,1,0) btn.BackgroundTransparency=1 btn.Text="" btn.ZIndex=5
+
+    local isOn = entry.enabled
+
+    local function setVisual(on)
+        local ti = TweenInfo.new(0.18,Enum.EasingStyle.Quad)
+        if on then
+            TweenService:Create(pill, ti,{BackgroundColor3=accent}):Play()
+            TweenService:Create(knob, ti,{Position=UDim2.new(0,27,0.5,-10),BackgroundColor3=Color3.fromRGB(255,255,255)}):Play()
+            TweenService:Create(row,  ti,{BackgroundColor3=Color3.fromRGB(14,20,28)}):Play()
+            statusLbl.Text="Active" statusLbl.TextColor3=accent
+        else
+            TweenService:Create(pill, ti,{BackgroundColor3=Color3.fromRGB(30,30,46)}):Play()
+            TweenService:Create(knob, ti,{Position=UDim2.new(0,3,0.5,-10),BackgroundColor3=Color3.fromRGB(90,90,110)}):Play()
+            TweenService:Create(row,  ti,{BackgroundColor3=Color3.fromRGB(17,17,26)}):Play()
+            statusLbl.Text="Disabled" statusLbl.TextColor3=Color3.fromRGB(90,90,110)
+        end
+    end
+
+    btn.MouseButton1Click:Connect(function()
+        isOn = not isOn
+        entry.enabled = isOn
+        if entry.module and entry.module.Config then
+            entry.module.Config.Enabled = isOn
+        end
+        -- Release aimbot lock when turning off
+        if entry.module == Aimbot and not isOn then
+            Aimbot:ReleaseLock()
+        end
+        setVisual(isOn)
+    end)
+
+    setVisual(isOn)
+end
+
+for i, entry in ipairs(Hub.Scripts) do
+    createRow(entry, i)
+end
+
+-- ── Footer ───────────────────────────────────────────────────
+local footer = Instance.new("TextLabel",window)
+footer.Text="NPC AI HUB  •  v2.0  •  RightShift = hide"
+footer.Font=Enum.Font.Gotham footer.TextSize=9
+footer.TextColor3=Color3.fromRGB(40,40,60) footer.BackgroundTransparency=1
+footer.Size=UDim2.new(1,0,0,18) footer.Position=UDim2.new(0,0,1,-20)
+footer.TextXAlignment=Enum.TextXAlignment.Center
+
+-- ============================================================
+--  DRAG
+-- ============================================================
+local dragging,dragStart,startPos = false,nil,nil
+topBar.InputBegan:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 then
+        dragging=true dragStart=i.Position startPos=window.Position
+    end
+end)
+topBar.InputEnded:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end
+end)
+UserInputService.InputChanged:Connect(function(i)
+    if dragging and i.UserInputType==Enum.UserInputType.MouseMovement then
+        local d=i.Position-dragStart
+        window.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+d.X,startPos.Y.Scale,startPos.Y.Offset+d.Y)
+    end
+end)
+
+-- ============================================================
+--  MINIMIZE
+-- ============================================================
+local minimized=false
+minBtn.MouseButton1Click:Connect(function()
+    minimized=not minimized
+    minBtn.Text=minimized and "□" or "—"
+    TweenService:Create(window,TweenInfo.new(0.2,Enum.EasingStyle.Quad),{
+        Size=UDim2.new(0,WINDOW_W,0,minimized and 40 or WINDOW_H)
+    }):Play()
+end)
+
+-- ============================================================
+--  KEYBIND  RightShift = show / hide hub
+-- ============================================================
+UserInputService.InputBegan:Connect(function(i,gp)
+    if gp then return end
+    if i.KeyCode==Enum.KeyCode.RightShift then
+        screenGui.Enabled=not screenGui.Enabled
+    end
+end)
+
+print("[NPC AI HUB v2.0] Ready  |  RightShift = toggle UI")
+print("  👁  NPC ESP")
+print("  🎯 NPC Aimbot  (FOV circle, smooth head-lock)")
