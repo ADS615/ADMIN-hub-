@@ -1,0 +1,421 @@
+-- Player Aimbot Script (LocalScript)
+-- Place in StarterPlayerScripts or StarterCharacterScripts
+-- Mobile: On-screen toggle button | PC: Press F to toggle
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+-- ============================================================
+--  CONFIG
+-- ============================================================
+local CONFIG = {
+	ATTACK_RANGE   = 150,
+	FIRE_RATE      = 0.35,
+	BULLET_SPEED   = 250,
+	BULLET_DAMAGE  = 25,
+	LEAD_SHOT      = true,
+	AIM_SMOOTHNESS = 0.18,   -- 0 = instant snap, 1 = very slow
+	WALL_CHECK     = true,   -- skip targets behind walls
+	TOGGLE_KEY     = Enum.KeyCode.F,
+	STICKY_AIM     = true,   -- stay on same target until dead/out of range
+	FOV_RADIUS     = 300,    -- screen-space FOV circle radius (px); 0 = disabled
+}
+
+-- ============================================================
+--  STATE
+-- ============================================================
+local aimbotEnabled  = false
+local currentTarget  = nil
+local lastFireTime   = 0
+local lastUpdateTime = 0
+
+-- ============================================================
+--  GUI
+-- ============================================================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "AimbotHUD"
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = LocalPlayer.PlayerGui
+
+-- FOV circle
+local fovCircle = Instance.new("Frame")
+fovCircle.Name = "FOVCircle"
+fovCircle.BackgroundTransparency = 1
+fovCircle.BorderSizePixel = 0
+fovCircle.ZIndex = 5
+fovCircle.Parent = screenGui
+
+local fovUICorner = Instance.new("UICorner")
+fovUICorner.CornerRadius = UDim.new(1, 0)
+fovUICorner.Parent = fovCircle
+
+local fovStroke = Instance.new("UIStroke")
+fovStroke.Color = Color3.fromRGB(255, 60, 60)
+fovStroke.Thickness = 1.5
+fovStroke.Transparency = 0.4
+fovStroke.Parent = fovCircle
+
+local function updateFOVCircle()
+	local size = CONFIG.FOV_RADIUS * 2
+	local center = Camera.ViewportSize / 2
+	fovCircle.Size = UDim2.new(0, size, 0, size)
+	fovCircle.Position = UDim2.new(0, center.X - CONFIG.FOV_RADIUS, 0, center.Y - CONFIG.FOV_RADIUS)
+	fovCircle.Visible = CONFIG.FOV_RADIUS > 0 and aimbotEnabled
+end
+
+-- Toggle button (mobile-friendly)
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Name = "ToggleBtn"
+toggleBtn.Size = UDim2.new(0, 110, 0, 44)
+toggleBtn.Position = UDim2.new(1, -120, 1, -60)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+toggleBtn.TextColor3 = Color3.fromRGB(255, 60, 60)
+toggleBtn.Text = "AIMBOT: OFF"
+toggleBtn.Font = Enum.Font.GothamBold
+toggleBtn.TextSize = 13
+toggleBtn.BorderSizePixel = 0
+toggleBtn.ZIndex = 10
+toggleBtn.Parent = screenGui
+
+local btnCorner = Instance.new("UICorner")
+btnCorner.CornerRadius = UDim.new(0, 8)
+btnCorner.Parent = toggleBtn
+
+local btnStroke = Instance.new("UIStroke")
+btnStroke.Color = Color3.fromRGB(255, 60, 60)
+btnStroke.Thickness = 1.5
+btnStroke.Parent = toggleBtn
+
+-- Status label
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Name = "StatusLabel"
+statusLabel.Size = UDim2.new(0, 200, 0, 24)
+statusLabel.Position = UDim2.new(0, 8, 0, 8)
+statusLabel.BackgroundTransparency = 1
+statusLabel.TextColor3 = Color3.fromRGB(255, 60, 60)
+statusLabel.Text = ""
+statusLabel.Font = Enum.Font.GothamBold
+statusLabel.TextSize = 13
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.ZIndex = 10
+statusLabel.Parent = screenGui
+
+-- ESP box drawn over target
+local espBox = Instance.new("Frame")
+espBox.Name = "ESPBox"
+espBox.BackgroundTransparency = 1
+espBox.BorderSizePixel = 0
+espBox.Visible = false
+espBox.ZIndex = 6
+espBox.Parent = screenGui
+
+local espStroke = Instance.new("UIStroke")
+espStroke.Color = Color3.fromRGB(255, 60, 60)
+espStroke.Thickness = 1.5
+espStroke.Parent = espBox
+
+local function setEnabled(val)
+	aimbotEnabled = val
+	if val then
+		toggleBtn.Text = "AIMBOT: ON"
+		toggleBtn.BackgroundColor3 = Color3.fromRGB(40, 10, 10)
+		toggleBtn.TextColor3 = Color3.fromRGB(255, 80, 80)
+		btnStroke.Color = Color3.fromRGB(255, 80, 80)
+		statusLabel.Text = "🎯 LOCKED"
+	else
+		toggleBtn.Text = "AIMBOT: OFF"
+		toggleBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+		toggleBtn.TextColor3 = Color3.fromRGB(160, 160, 160)
+		btnStroke.Color = Color3.fromRGB(100, 100, 100)
+		statusLabel.Text = ""
+		currentTarget = nil
+		espBox.Visible = false
+	end
+	updateFOVCircle()
+end
+
+toggleBtn.MouseButton1Click:Connect(function()
+	setEnabled(not aimbotEnabled)
+end)
+
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == CONFIG.TOGGLE_KEY then
+		setEnabled(not aimbotEnabled)
+	end
+end)
+
+-- ============================================================
+--  UTILITIES
+-- ============================================================
+local function hasLineOfSight(from, to, ignore)
+	local dir = (to - from)
+	local params = RaycastParams.new()
+	params.FilterDescendantsInstances = ignore
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	local result = Workspace:Raycast(from, dir, params)
+	if result then
+		-- hit something before reaching target
+		return false
+	end
+	return true
+end
+
+local function screenDistanceFromCenter(worldPos)
+	local _, onScreen = Camera:WorldToViewportPoint(worldPos)
+	if not onScreen then return math.huge end
+	local vp, _ = Camera:WorldToViewportPoint(worldPos)
+	local center = Camera.ViewportSize / 2
+	return (Vector2.new(vp.X, vp.Y) - center).Magnitude
+end
+
+local function getCharacterParts(char)
+	return {
+		char:FindFirstChild("HumanoidRootPart"),
+		char:FindFirstChild("Head"),
+	}
+end
+
+-- ============================================================
+--  TARGET FINDING
+-- ============================================================
+local function findTarget()
+	local character = LocalPlayer.Character
+	if not character then return nil end
+	local HRP = character:FindFirstChild("HumanoidRootPart")
+	if not HRP then return nil end
+
+	-- sticky: keep current if still valid
+	if CONFIG.STICKY_AIM and currentTarget then
+		local tHum = currentTarget:FindFirstChild("Humanoid")
+		local tHRP = currentTarget:FindFirstChild("HumanoidRootPart")
+		if tHum and tHum.Health > 0 and tHRP then
+			local dist = (tHRP.Position - HRP.Position).Magnitude
+			if dist <= CONFIG.ATTACK_RANGE then
+				return currentTarget
+			end
+		end
+	end
+
+	local best = nil
+	local bestScore = math.huge
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player == LocalPlayer then continue end
+		local char = player.Character
+		if not char then continue end
+		local root = char:FindFirstChild("HumanoidRootPart")
+		local hum  = char:FindFirstChild("Humanoid")
+		if not root or not hum or hum.Health <= 0 then continue end
+
+		local dist = (root.Position - HRP.Position).Magnitude
+		if dist > CONFIG.ATTACK_RANGE then continue end
+
+		if CONFIG.WALL_CHECK then
+			local ignore = {character, char}
+			if not hasLineOfSight(HRP.Position + Vector3.new(0,1.5,0), root.Position + Vector3.new(0,1.5,0), ignore) then
+				continue
+			end
+		end
+
+		-- Score = screen distance from crosshair (closest wins)
+		local screenDist = (CONFIG.FOV_RADIUS > 0)
+			and screenDistanceFromCenter(root.Position)
+			or dist
+
+		if CONFIG.FOV_RADIUS > 0 and screenDist > CONFIG.FOV_RADIUS then continue end
+
+		if screenDist < bestScore then
+			bestScore = screenDist
+			best = char
+		end
+	end
+
+	return best
+end
+
+-- ============================================================
+--  SMOOTH AIM
+-- ============================================================
+local function smoothAim(targetCharacter)
+	local character = LocalPlayer.Character
+	if not character then return end
+	local HRP = character:FindFirstChild("HumanoidRootPart")
+	if not HRP then return end
+	local targetRoot = targetCharacter:FindFirstChild("HumanoidRootPart")
+	if not targetRoot then return end
+
+	local aimPos = targetRoot.Position + Vector3.new(0, 1.5, 0)
+	local currentLook = HRP.CFrame.LookVector
+	local desiredLook = (aimPos - HRP.Position).Unit
+	local smoothed = currentLook:Lerp(desiredLook, 1 - CONFIG.AIM_SMOOTHNESS)
+
+	HRP.CFrame = CFrame.new(HRP.Position, HRP.Position + smoothed)
+end
+
+-- ============================================================
+--  BULLET / FIRE
+-- ============================================================
+local function fireBullet(targetCharacter)
+	local character = LocalPlayer.Character
+	if not character then return end
+	local HRP = character:FindFirstChild("HumanoidRootPart")
+	if not HRP then return end
+	local targetRoot = targetCharacter:FindFirstChild("HumanoidRootPart")
+	if not targetRoot then return end
+
+	local origin = HRP.Position + Vector3.new(0, 1.5, 0)
+
+	local targetPos
+	if CONFIG.LEAD_SHOT then
+		local vel = targetRoot.AssemblyLinearVelocity
+		local travelTime = (targetRoot.Position - origin).Magnitude / CONFIG.BULLET_SPEED
+		targetPos = targetRoot.Position + (vel * travelTime) + Vector3.new(0, 1.5, 0)
+	else
+		targetPos = targetRoot.Position + Vector3.new(0, 1.5, 0)
+	end
+
+	local direction = (targetPos - origin).Unit
+
+	local bullet = Instance.new("Part")
+	bullet.Size = Vector3.new(0.15, 0.15, 0.7)
+	bullet.Shape = Enum.PartType.Cylinder
+	bullet.Color = Color3.fromRGB(255, 220, 50)
+	bullet.Material = Enum.Material.Neon
+	bullet.CastShadow = false
+	bullet.CanCollide = false
+	bullet.Anchored = false
+	bullet.CFrame = CFrame.lookAt(origin, origin + direction) * CFrame.Angles(0, math.pi/2, 0)
+	bullet.Parent = Workspace
+
+	local bv = Instance.new("BodyVelocity")
+	bv.Velocity = direction * CONFIG.BULLET_SPEED
+	bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+	bv.Parent = bullet
+
+	local hitConn
+	local lifeTime = 0
+	hitConn = RunService.Heartbeat:Connect(function(dt)
+		lifeTime += dt
+		if lifeTime > 3 then
+			hitConn:Disconnect()
+			bullet:Destroy()
+			return
+		end
+
+		local params = RaycastParams.new()
+		params.FilterDescendantsInstances = {character, bullet}
+		params.FilterType = Enum.RaycastFilterType.Exclude
+
+		local result = Workspace:Raycast(bullet.Position, direction * (CONFIG.BULLET_SPEED * dt * 2), params)
+		if result then
+			local hitChar = result.Instance:FindFirstAncestorOfClass("Model")
+			if hitChar then
+				local hitHum = hitChar:FindFirstChild("Humanoid")
+				if hitHum and hitHum.Health > 0 then
+					for _, p in ipairs(Players:GetPlayers()) do
+						if p ~= LocalPlayer and p.Character == hitChar then
+							hitHum:TakeDamage(CONFIG.BULLET_DAMAGE)
+							break
+						end
+					end
+				end
+			end
+			hitConn:Disconnect()
+
+			local impact = Instance.new("Part")
+			impact.Size = Vector3.new(0.4, 0.4, 0.4)
+			impact.Shape = Enum.PartType.Ball
+			impact.Anchored = true
+			impact.CanCollide = false
+			impact.Material = Enum.Material.Neon
+			impact.Color = Color3.fromRGB(255, 120, 0)
+			impact.CFrame = CFrame.new(result.Position)
+			impact.Parent = Workspace
+			game:GetService("Debris"):AddItem(impact, 0.08)
+			bullet:Destroy()
+		end
+	end)
+
+	game:GetService("Debris"):AddItem(bullet, 3)
+end
+
+-- ============================================================
+--  ESP BOX UPDATE
+-- ============================================================
+local function updateESP(targetCharacter)
+	if not targetCharacter then
+		espBox.Visible = false
+		return
+	end
+
+	local root = targetCharacter:FindFirstChild("HumanoidRootPart")
+	if not root then espBox.Visible = false return end
+
+	local screenPos, onScreen = Camera:WorldToViewportPoint(root.Position)
+	if not onScreen then espBox.Visible = false return end
+
+	local topPos    = Camera:WorldToViewportPoint(root.Position + Vector3.new(0, 3, 0))
+	local bottomPos = Camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
+	local height    = math.abs(topPos.Y - bottomPos.Y)
+	local width     = height * 0.6
+
+	espBox.Size = UDim2.new(0, width, 0, height)
+	espBox.Position = UDim2.new(0, screenPos.X - width/2, 0, topPos.Y)
+	espBox.Visible = true
+end
+
+-- ============================================================
+--  MAIN LOOP
+-- ============================================================
+RunService.Heartbeat:Connect(function()
+	if not aimbotEnabled then return end
+
+	local character = LocalPlayer.Character
+	if not character then return end
+	local hum = character:FindFirstChild("Humanoid")
+	if not hum or hum.Health <= 0 then return end
+
+	local now = tick()
+
+	if now - lastUpdateTime >= 0.1 then
+		lastUpdateTime = now
+		currentTarget = findTarget()
+
+		if currentTarget then
+			local tHum = currentTarget:FindFirstChild("Humanoid")
+			statusLabel.Text = "🎯 LOCKED"
+			statusLabel.TextColor3 = Color3.fromRGB(255, 60, 60)
+			_ = tHum
+		else
+			statusLabel.Text = "🔍 SEARCHING..."
+			statusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+		end
+	end
+
+	updateESP(currentTarget)
+	updateFOVCircle()
+
+	if currentTarget then
+		local tHum = currentTarget:FindFirstChild("Humanoid")
+		if not tHum or tHum.Health <= 0 then
+			currentTarget = nil
+			return
+		end
+
+		smoothAim(currentTarget)
+
+		if now - lastFireTime >= CONFIG.FIRE_RATE then
+			lastFireTime = now
+			fireBullet(currentTarget)
+		end
+	end
+end)
