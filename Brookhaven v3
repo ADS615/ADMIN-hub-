@@ -1,0 +1,506 @@
+-- Brookhaven Ultimate Utility Script
+-- Horizontal Hub | Auto Unban | Teleport | Troll | ESP | Mobile
+-- Delta / Executor Compatible
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+local Settings = {
+    WalkSpeed     = 16,
+    NoclipEnabled = false,
+    ESPEnabled    = false,
+    InfiniteJump  = false,
+    AntiAFK       = true,
+    SpeedAmount   = 50,
+    TeleportTween = true,
+}
+
+-- ============================================================
+-- SCREEN GUI
+-- ============================================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "BrookhavenHub"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = LocalPlayer.PlayerGui
+
+-- ============================================================
+-- TOGGLE BUTTON (always visible)
+-- ============================================================
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Size = UDim2.new(0, 80, 0, 30)
+ToggleBtn.Position = UDim2.new(0.5, -40, 1, -38)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 55)
+ToggleBtn.TextColor3 = Color3.fromRGB(180, 180, 255)
+ToggleBtn.Text = "CLOSE HUB"
+ToggleBtn.TextSize = 11
+ToggleBtn.Font = Enum.Font.GothamBold
+ToggleBtn.BorderSizePixel = 0
+ToggleBtn.ZIndex = 20
+ToggleBtn.Parent = ScreenGui
+Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 6)
+local TStroke = Instance.new("UIStroke", ToggleBtn)
+TStroke.Color = Color3.fromRGB(80, 80, 200)
+TStroke.Thickness = 1
+
+-- ============================================================
+-- MAIN HORIZONTAL FRAME
+-- ============================================================
+local HubFrame = Instance.new("Frame")
+HubFrame.Size = UDim2.new(1, -20, 0, 210)
+HubFrame.Position = UDim2.new(0, 10, 1, -255)
+HubFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 18)
+HubFrame.BorderSizePixel = 0
+HubFrame.ClipsDescendants = true
+HubFrame.Parent = ScreenGui
+Instance.new("UICorner", HubFrame).CornerRadius = UDim.new(0, 14)
+local HStroke = Instance.new("UIStroke", HubFrame)
+HStroke.Color = Color3.fromRGB(80, 80, 200)
+HStroke.Thickness = 1.5
+
+-- Title bar
+local TitleBar = Instance.new("Frame")
+TitleBar.Size = UDim2.new(1, 0, 0, 34)
+TitleBar.BackgroundColor3 = Color3.fromRGB(20, 20, 42)
+TitleBar.BorderSizePixel = 0
+TitleBar.Parent = HubFrame
+Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 14)
+
+local TitleLbl = Instance.new("TextLabel")
+TitleLbl.Size = UDim2.new(1, 0, 1, 0)
+TitleLbl.BackgroundTransparency = 1
+TitleLbl.Text = "Brookhaven Utils  |  Use tabs to navigate"
+TitleLbl.TextColor3 = Color3.fromRGB(160, 160, 255)
+TitleLbl.TextSize = 12
+TitleLbl.Font = Enum.Font.GothamBold
+TitleLbl.Parent = TitleBar
+
+-- Tab bar (horizontal row of tab buttons)
+local TabBar = Instance.new("Frame")
+TabBar.Size = UDim2.new(1, 0, 0, 34)
+TabBar.Position = UDim2.new(0, 0, 0, 34)
+TabBar.BackgroundColor3 = Color3.fromRGB(14, 14, 26)
+TabBar.BorderSizePixel = 0
+TabBar.Parent = HubFrame
+
+local TabLayout = Instance.new("UIListLayout", TabBar)
+TabLayout.FillDirection = Enum.FillDirection.Horizontal
+TabLayout.Padding = UDim.new(0, 4)
+local TabPad = Instance.new("UIPadding", TabBar)
+TabPad.PaddingLeft = UDim.new(0, 6)
+TabPad.PaddingTop = UDim.new(0, 4)
+
+-- Content area (horizontal scroll for each tab page)
+local ContentArea = Instance.new("Frame")
+ContentArea.Size = UDim2.new(1, 0, 1, -68)
+ContentArea.Position = UDim2.new(0, 0, 0, 68)
+ContentArea.BackgroundTransparency = 1
+ContentArea.ClipsDescendants = true
+ContentArea.Parent = HubFrame
+
+-- ============================================================
+-- NOTIFICATION
+-- ============================================================
+local function Notify(msg, color)
+    local notif = Instance.new("TextLabel")
+    notif.Size = UDim2.new(0, 260, 0, 34)
+    notif.Position = UDim2.new(0.5, -130, 0, -38)
+    notif.BackgroundColor3 = color or Color3.fromRGB(25, 25, 55)
+    notif.TextColor3 = Color3.fromRGB(255, 255, 255)
+    notif.Text = msg
+    notif.TextSize = 12
+    notif.Font = Enum.Font.GothamBold
+    notif.BorderSizePixel = 0
+    notif.ZIndex = 30
+    notif.Parent = ScreenGui
+    Instance.new("UICorner", notif).CornerRadius = UDim.new(0, 8)
+    TweenService:Create(notif, TweenInfo.new(0.3), {Position = UDim2.new(0.5, -130, 0, 10)}):Play()
+    task.delay(2.5, function()
+        TweenService:Create(notif, TweenInfo.new(0.3), {Position = UDim2.new(0.5, -130, 0, -38)}):Play()
+        task.delay(0.35, function() notif:Destroy() end)
+    end)
+end
+
+-- ============================================================
+-- TAB SYSTEM
+-- ============================================================
+local Tabs = {}
+local ActiveTab = nil
+
+local function MakeTab(name)
+    -- Tab button
+    local tabBtn = Instance.new("TextButton")
+    tabBtn.Size = UDim2.new(0, 90, 0, 26)
+    tabBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 50)
+    tabBtn.Text = name
+    tabBtn.TextColor3 = Color3.fromRGB(160, 160, 200)
+    tabBtn.TextSize = 11
+    tabBtn.Font = Enum.Font.GothamBold
+    tabBtn.BorderSizePixel = 0
+    tabBtn.Parent = TabBar
+    Instance.new("UICorner", tabBtn).CornerRadius = UDim.new(0, 6)
+
+    -- Tab page (horizontal scroll of buttons)
+    local page = Instance.new("ScrollingFrame")
+    page.Size = UDim2.new(1, 0, 1, 0)
+    page.BackgroundTransparency = 1
+    page.ScrollBarThickness = 3
+    page.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 200)
+    page.CanvasSize = UDim2.new(0, 0, 0, 0)
+    page.AutomaticCanvasSize = Enum.AutomaticSize.X
+    page.ScrollingDirection = Enum.ScrollingDirection.X
+    page.Visible = false
+    page.Parent = ContentArea
+
+    local layout = Instance.new("UIListLayout", page)
+    layout.FillDirection = Enum.FillDirection.Horizontal
+    layout.Padding = UDim.new(0, 8)
+    layout.VerticalAlignment = Enum.VerticalAlignment.Center
+
+    local pad = Instance.new("UIPadding", page)
+    pad.PaddingLeft = UDim.new(0, 10)
+    pad.PaddingRight = UDim.new(0, 10)
+
+    local tab = {btn = tabBtn, page = page}
+    table.insert(Tabs, tab)
+
+    tabBtn.MouseButton1Click:Connect(function()
+        for _, t in ipairs(Tabs) do
+            t.page.Visible = false
+            t.btn.BackgroundColor3 = Color3.fromRGB(28, 28, 50)
+            t.btn.TextColor3 = Color3.fromRGB(160, 160, 200)
+        end
+        page.Visible = true
+        tabBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 160)
+        tabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        ActiveTab = tab
+    end)
+
+    return tab
+end
+
+-- Card = vertical stack of items inside a horizontal slot
+local function MakeCard(tab, title)
+    local card = Instance.new("Frame")
+    card.Size = UDim2.new(0, 150, 1, -16)
+    card.BackgroundColor3 = Color3.fromRGB(18, 18, 32)
+    card.BorderSizePixel = 0
+    card.Parent = tab.page
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 10)
+    local cs = Instance.new("UIStroke", card)
+    cs.Color = Color3.fromRGB(50, 50, 100)
+    cs.Thickness = 1
+
+    local header = Instance.new("TextLabel")
+    header.Size = UDim2.new(1, 0, 0, 24)
+    header.BackgroundColor3 = Color3.fromRGB(28, 28, 55)
+    header.Text = title
+    header.TextColor3 = Color3.fromRGB(140, 140, 255)
+    header.TextSize = 11
+    header.Font = Enum.Font.GothamBold
+    header.BorderSizePixel = 0
+    header.Parent = card
+    Instance.new("UICorner", header).CornerRadius = UDim.new(0, 10)
+
+    local inner = Instance.new("ScrollingFrame")
+    inner.Size = UDim2.new(1, -8, 1, -30)
+    inner.Position = UDim2.new(0, 4, 0, 27)
+    inner.BackgroundTransparency = 1
+    inner.ScrollBarThickness = 2
+    inner.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 180)
+    inner.CanvasSize = UDim2.new(0, 0, 0, 0)
+    inner.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    inner.Parent = card
+
+    local il = Instance.new("UIListLayout", inner)
+    il.Padding = UDim.new(0, 4)
+    local ip = Instance.new("UIPadding", inner)
+    ip.PaddingTop = UDim.new(0, 4)
+
+    return inner
+end
+
+local function AddButton(parent, label, color, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 30)
+    btn.BackgroundColor3 = color or Color3.fromRGB(35, 35, 65)
+    btn.Text = label
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextSize = 11
+    btn.Font = Enum.Font.GothamBold
+    btn.BorderSizePixel = 0
+    btn.TextWrapped = true
+    btn.Parent = parent
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    btn.MouseButton1Click:Connect(callback)
+    return btn
+end
+
+local function AddToggle(parent, label, default, callback)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 0, 30)
+    frame.BackgroundColor3 = Color3.fromRGB(24, 24, 44)
+    frame.BorderSizePixel = 0
+    frame.Parent = parent
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(0.62, 0, 1, 0)
+    lbl.Position = UDim2.new(0, 6, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = label
+    lbl.TextColor3 = Color3.fromRGB(210, 210, 210)
+    lbl.TextSize = 10
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextWrapped = true
+    lbl.Parent = frame
+
+    local state = default or false
+
+    local pill = Instance.new("TextButton")
+    pill.Size = UDim2.new(0, 36, 0, 18)
+    pill.Position = UDim2.new(1, -42, 0.5, -9)
+    pill.BackgroundColor3 = state and Color3.fromRGB(70, 70, 200) or Color3.fromRGB(55, 55, 55)
+    pill.Text = ""
+    pill.BorderSizePixel = 0
+    pill.Parent = frame
+    Instance.new("UICorner", pill).CornerRadius = UDim.new(1, 0)
+
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.new(0, 14, 0, 14)
+    knob.Position = state and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+    knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    knob.BorderSizePixel = 0
+    knob.Parent = pill
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+    pill.MouseButton1Click:Connect(function()
+        state = not state
+        TweenService:Create(pill, TweenInfo.new(0.15), {
+            BackgroundColor3 = state and Color3.fromRGB(70, 70, 200) or Color3.fromRGB(55, 55, 55)
+        }):Play()
+        TweenService:Create(knob, TweenInfo.new(0.15), {
+            Position = state and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+        }):Play()
+        callback(state)
+    end)
+end
+
+-- ============================================================
+-- HELPERS
+-- ============================================================
+local function GetChar() return LocalPlayer.Character end
+local function GetHRP()
+    local c = GetChar(); return c and c:FindFirstChild("HumanoidRootPart")
+end
+local function GetHum()
+    local c = GetChar(); return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+-- ============================================================
+-- TAB 1: BAN BYPASS
+-- ============================================================
+local t1 = MakeTab("Bypass")
+t1.btn.BackgroundColor3 = Color3.fromRGB(60, 60, 160)
+t1.btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+t1.page.Visible = true
+ActiveTab = t1
+
+local c1 = MakeCard(t1, "Ban Tools")
+AddButton(c1, "Remove All Barriers", Color3.fromRGB(160, 35, 35), function()
+    local removed = 0
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        local name = obj.Name:lower()
+        if obj:IsA("BasePart") or obj:IsA("UnionOperation") then
+            if name:find("ban") or name:find("barrier") or name:find("block") or
+               name:find("wall") or name:find("invisible") then
+                if obj.CanCollide and obj.Transparency >= 0.8 then
+                    obj.CanCollide = false; obj.Transparency = 1; removed += 1
+                end
+            end
+            if obj.Transparency == 1 and obj.CanCollide then
+                obj.CanCollide = false; removed += 1
+            end
+        end
+        if obj:IsA("ForceField") then obj:Destroy(); removed += 1 end
+    end
+    Notify("Removed " .. removed .. " barriers!", Color3.fromRGB(40, 140, 40))
+end)
+AddButton(c1, "Bypass All Doors", Color3.fromRGB(140, 55, 20), function()
+    local n = 0
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        local name = obj.Name:lower()
+        if obj:IsA("BasePart") and (name:find("door") or name:find("gate") or name:find("entry")) then
+            obj.CanCollide = false; n += 1
+        end
+    end
+    Notify("Bypassed " .. n .. " doors!")
+end)
+AddButton(c1, "Remove All Collide", Color3.fromRGB(120, 30, 80), function()
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and obj.Transparency == 1 then
+            obj.CanCollide = false
+        end
+    end
+    Notify("All invisible parts = no collide!")
+end)
+
+-- ============================================================
+-- TAB 2: TELEPORT
+-- ============================================================
+local t2 = MakeTab("Teleport")
+local c2a = MakeCard(t2, "Players")
+
+AddButton(c2a, "Teleport to Player", Color3.fromRGB(30, 75, 155), function()
+    local existing = ScreenGui:FindFirstChild("PPick")
+    if existing then existing:Destroy() return end
+    local picker = Instance.new("Frame")
+    picker.Name = "PPick"
+    picker.Size = UDim2.new(0, 180, 0, 0)
+    picker.Position = UDim2.new(0.5, -90, 0.1, 0)
+    picker.BackgroundColor3 = Color3.fromRGB(14, 14, 28)
+    picker.BorderSizePixel = 0
+    picker.AutomaticSize = Enum.AutomaticSize.Y
+    picker.ZIndex = 25
+    picker.Parent = ScreenGui
+    Instance.new("UICorner", picker).CornerRadius = UDim.new(0, 10)
+    Instance.new("UIListLayout", picker).Padding = UDim.new(0, 3)
+    local pp = Instance.new("UIPadding", picker)
+    pp.PaddingTop = UDim.new(0,5); pp.PaddingBottom = UDim.new(0,5)
+    pp.PaddingLeft = UDim.new(0,5); pp.PaddingRight = UDim.new(0,5)
+    local hdr = Instance.new("TextLabel", picker)
+    hdr.Size = UDim2.new(1,0,0,22); hdr.BackgroundTransparency = 1
+    hdr.Text = "Pick Player"; hdr.TextColor3 = Color3.fromRGB(180,180,255)
+    hdr.TextSize = 12; hdr.Font = Enum.Font.GothamBold; hdr.ZIndex = 25
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+        local b = Instance.new("TextButton", picker)
+        b.Size = UDim2.new(1,0,0,28); b.BackgroundColor3 = Color3.fromRGB(30,30,55)
+        b.Text = p.Name; b.TextColor3 = Color3.fromRGB(255,255,255)
+        b.TextSize = 11; b.Font = Enum.Font.Gotham; b.BorderSizePixel = 0; b.ZIndex = 25
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+        b.MouseButton1Click:Connect(function()
+            picker:Destroy()
+            local hrp2 = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+            local myHRP = GetHRP()
+            if hrp2 and myHRP then
+                myHRP.CFrame = hrp2.CFrame * CFrame.new(0, 0, 3)
+                Notify("Teleported to " .. p.Name)
+            end
+        end)
+    end
+    task.delay(7, function() if picker and picker.Parent then picker:Destroy() end end)
+end)
+
+AddButton(c2a, "Bring Player to Me", Color3.fromRGB(60, 30, 120), function()
+    local existing = ScreenGui:FindFirstChild("BringPick")
+    if existing then existing:Destroy() return end
+    local picker = Instance.new("Frame")
+    picker.Name = "BringPick"
+    picker.Size = UDim2.new(0, 180, 0, 0)
+    picker.Position = UDim2.new(0.5, -90, 0.1, 0)
+    picker.BackgroundColor3 = Color3.fromRGB(14, 14, 28)
+    picker.BorderSizePixel = 0
+    picker.AutomaticSize = Enum.AutomaticSize.Y
+    picker.ZIndex = 25
+    picker.Parent = ScreenGui
+    Instance.new("UICorner", picker).CornerRadius = UDim.new(0, 10)
+    Instance.new("UIListLayout", picker).Padding = UDim.new(0, 3)
+    local pp2 = Instance.new("UIPadding", picker)
+    pp2.PaddingTop = UDim.new(0,5); pp2.PaddingBottom = UDim.new(0,5)
+    pp2.PaddingLeft = UDim.new(0,5); pp2.PaddingRight = UDim.new(0,5)
+    local hdr2 = Instance.new("TextLabel", picker)
+    hdr2.Size = UDim2.new(1,0,0,22); hdr2.BackgroundTransparency = 1
+    hdr2.Text = "Bring Who?"; hdr2.TextColor3 = Color3.fromRGB(180,180,255)
+    hdr2.TextSize = 12; hdr2.Font = Enum.Font.GothamBold; hdr2.ZIndex = 25
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+        local b = Instance.new("TextButton", picker)
+        b.Size = UDim2.new(1,0,0,28); b.BackgroundColor3 = Color3.fromRGB(30,30,55)
+        b.Text = p.Name; b.TextColor3 = Color3.fromRGB(255,255,255)
+        b.TextSize = 11; b.Font = Enum.Font.Gotham; b.BorderSizePixel = 0; b.ZIndex = 25
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+        b.MouseButton1Click:Connect(function()
+            picker:Destroy()
+            local myHRP = GetHRP()
+            local pHRP = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+            if myHRP and pHRP then
+                pHRP.CFrame = myHRP.CFrame * CFrame.new(2, 0, 0)
+                Notify("Brought " .. p.Name .. " to you!")
+            end
+        end)
+    end
+    task.delay(7, function() if picker and picker.Parent then picker:Destroy() end end)
+end)
+
+local c2b = MakeCard(t2, "Locations")
+AddButton(c2b, "Teleport to Spawn", Color3.fromRGB(30, 100, 70), function()
+    local spawn = Workspace:FindFirstChildWhichIsA("SpawnLocation", true)
+    local hrp = GetHRP()
+    if hrp and spawn then hrp.CFrame = spawn.CFrame + Vector3.new(0, 5, 0); Notify("Teleported to Spawn!")
+    else Notify("Spawn not found") end
+end)
+AddButton(c2b, "To Nearest Car", Color3.fromRGB(45, 45, 110), function()
+    local hrp = GetHRP(); if not hrp then return end
+    local closest, cd = nil, math.huge
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj.Name:lower():find("car") then
+            local r = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+            if r then
+                local d = (r.Position - hrp.Position).Magnitude
+                if d < cd then cd = d; closest = r end
+            end
+        end
+    end
+    if closest then hrp.CFrame = CFrame.new(closest.Position + Vector3.new(0,4,0)); Notify("Teleported to car!")
+    else Notify("No car found") end
+end)
+AddButton(c2b, "Copy Position", Color3.fromRGB(40, 80, 40), function()
+    local hrp = GetHRP()
+    if hrp then
+        local p = hrp.Position
+        setclipboard(string.format("Vector3.new(%.2f, %.2f, %.2f)", p.X, p.Y, p.Z))
+        Notify("Position copied!")
+    end
+end)
+
+-- ============================================================
+-- TAB 3: MOVEMENT
+-- ============================================================
+local t3 = MakeTab("Movement")
+local c3a = MakeCard(t3, "Speed / Jump")
+AddToggle(c3a, "Speed Boost", false, function(v)
+    local hum = GetHum()
+    if hum then hum.WalkSpeed = v and Settings.SpeedAmount or Settings.WalkSpeed end
+    Notify(v and "Speed ON" or "Speed OFF")
+end)
+AddToggle(c3a, "Infinite Jump", false, function(v)
+    Settings.InfiniteJump = v
+    Notify(v and "Infinite Jump ON" or "OFF")
+end)
+AddToggle(c3a, "Noclip", false, function(v)
+    Settings.NoclipEnabled = v
+    Notify(v and "Noclip ON" or "Noclip OFF")
+end)
+AddButton(c3a, "Super Jump (x1)", Color3.fromRGB(60, 40, 100), function()
+    local hum = GetHum(); if hum then hum.JumpPower = 200
+        task.delay(1, function() if GetHum() then GetHum().JumpPower = 50 end end)
+        Notify("Super Jump!")
+    end
+end)
+
+local c3b = MakeCard(t3, "Fly")
+AddButton(c3b, "Toggle Fly", Color3.fromRGB(35, 80, 150), function()
+    local hrp = GetHRP(); local hum = GetHum()
+    if not hrp or not hum then return end
+    if hrp:FindFirstChild("FlyForce") then
+        hrp:FindFirstChild("FlyForce"):Destroy()
+        hrp:FindFirstChild("FlyGyro"):Destroy()
+        hum.PlatformStand = false; Notif
