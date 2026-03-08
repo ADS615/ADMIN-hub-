@@ -1,0 +1,452 @@
+-- Rivals Aimbot | Silent Aim | Mobile Support
+-- Compatible with Delta and similar executors
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- ============================================================
+-- SETTINGS
+-- ============================================================
+local Settings = {
+    -- Silent Aim
+    SilentAim = true,
+    SilentAimPart = "HumanoidRootPart", -- Head, HumanoidRootPart, UpperTorso
+
+    -- FOV Circle
+    FOVEnabled = true,
+    FOVRadius = 180,
+    FOVColor = Color3.fromRGB(255, 255, 255),
+    FOVThickness = 1.5,
+    FOVFilled = false,
+
+    -- Aimbot
+    AimbotEnabled = true,
+    AimPart = "Head",
+    AimSmoothing = 0,     -- 0 = instant, higher = smoother
+    MaxDistance = 500,
+    TeamCheck = true,
+    WallCheck = false,     -- Wallcheck can be laggy; off by default
+
+    -- Trigger key (PC)
+    AimKey = Enum.UserInputType.MouseButton2, -- Right click to aim on PC
+
+    -- Mobile
+    MobileEnabled = true,
+    MobileAutoAim = true,  -- Auto aim on mobile (no button needed)
+    MobileAimInterval = 0.05,
+
+    -- Highlight
+    HighlightEnabled = true,
+    HighlightFillColor = Color3.fromRGB(255, 0, 0),
+    HighlightOutlineColor = Color3.fromRGB(255, 255, 255),
+    HighlightFillTransparency = 0.7,
+    HighlightOutlineTransparency = 0,
+
+    -- Prediction
+    BulletPrediction = true,
+    BulletSpeed = 500,
+}
+
+-- ============================================================
+-- DETECT MOBILE
+-- ============================================================
+local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+-- ============================================================
+-- FOV CIRCLE (PC)
+-- ============================================================
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Visible = Settings.FOVEnabled and not isMobile
+FOVCircle.Radius = Settings.FOVRadius
+FOVCircle.Color = Settings.FOVColor
+FOVCircle.Thickness = Settings.FOVThickness
+FOVCircle.Filled = Settings.FOVFilled
+FOVCircle.NumSides = 64
+
+-- ============================================================
+-- HIGHLIGHTS
+-- ============================================================
+local Highlights = {}
+
+local function AddHighlight(player)
+    if Highlights[player] then return end
+    local char = player.Character
+    if not char then return end
+    local h = Instance.new("Highlight")
+    h.FillColor = Settings.HighlightFillColor
+    h.OutlineColor = Settings.HighlightOutlineColor
+    h.FillTransparency = Settings.HighlightFillTransparency
+    h.OutlineTransparency = Settings.HighlightOutlineTransparency
+    h.Adornee = char
+    h.Parent = char
+    Highlights[player] = h
+end
+
+local function RemoveHighlight(player)
+    if Highlights[player] then
+        Highlights[player]:Destroy()
+        Highlights[player] = nil
+    end
+end
+
+local function RefreshHighlights()
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            if Settings.HighlightEnabled then
+                if player.Character then
+                    AddHighlight(player)
+                end
+            else
+                RemoveHighlight(player)
+            end
+        end
+    end
+end
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        task.wait(0.5)
+        if Settings.HighlightEnabled then
+            AddHighlight(player)
+        end
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    RemoveHighlight(player)
+end)
+
+-- Initial highlights
+for _, player in ipairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then
+        player.CharacterAdded:Connect(function()
+            task.wait(0.5)
+            if Settings.HighlightEnabled then
+                AddHighlight(player)
+            end
+        end)
+        if player.Character and Settings.HighlightEnabled then
+            AddHighlight(player)
+        end
+    end
+end
+
+-- ============================================================
+-- UTILITY FUNCTIONS
+-- ============================================================
+local function GetCharacter(player)
+    return player.Character
+end
+
+local function GetHumanoid(char)
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function IsAlive(player)
+    local char = GetCharacter(player)
+    if not char then return false end
+    local hum = GetHumanoid(char)
+    return hum and hum.Health > 0
+end
+
+local function IsSameTeam(player)
+    if not Settings.TeamCheck then return false end
+    return player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team
+end
+
+local function GetPart(char, partName)
+    return char:FindFirstChild(partName) or char:FindFirstChild("HumanoidRootPart")
+end
+
+local function WorldToViewport(pos)
+    local screenPos, onScreen = Camera:WorldToViewportPoint(pos)
+    return Vector2.new(screenPos.X, screenPos.Y), onScreen, screenPos.Z
+end
+
+local function GetScreenCenter()
+    return Camera.ViewportSize / 2
+end
+
+local function GetDistance2D(a, b)
+    return (a - b).Magnitude
+end
+
+local function RaycastCheck(origin, target)
+    if not Settings.WallCheck then return true end
+    local direction = (target - origin)
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {LocalPlayer.Character}
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local result = workspace:Raycast(origin, direction, params)
+    if result then
+        local hitInstance = result.Instance
+        local hitChar = hitInstance:FindFirstAncestorOfClass("Model")
+        if hitChar then
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p.Character == hitChar then return true end
+            end
+        end
+        return false
+    end
+    return true
+end
+
+local function PredictPosition(char, partName)
+    local part = GetPart(char, partName)
+    if not part then return nil end
+    if not Settings.BulletPrediction then return part.Position end
+    local camPos = Camera.CFrame.Position
+    local dist = (part.Position - camPos).Magnitude
+    local travelTime = dist / Settings.BulletSpeed
+    local velocity = part.AssemblyLinearVelocity or Vector3.zero
+    return part.Position + velocity * travelTime
+end
+
+-- ============================================================
+-- TARGET FINDING
+-- ============================================================
+local function GetClosestTarget()
+    local closestPlayer = nil
+    local closestDist = math.huge
+    local center = isMobile and GetScreenCenter() or (UserInputService:GetMouseLocation())
+    local fovRadius = isMobile and math.huge or Settings.FOVRadius
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if IsSameTeam(player) then continue end
+        if not IsAlive(player) then continue end
+
+        local char = GetCharacter(player)
+        if not char then continue end
+
+        local part = GetPart(char, Settings.AimPart)
+        if not part then continue end
+
+        local predictedPos = PredictPosition(char, Settings.AimPart)
+        if not predictedPos then continue end
+
+        local screenPos, onScreen = WorldToViewport(predictedPos)
+        if not onScreen then continue end
+
+        local dist2D = GetDistance2D(screenPos, center)
+        if dist2D > fovRadius then continue end
+
+        local dist3D = (part.Position - Camera.CFrame.Position).Magnitude
+        if dist3D > Settings.MaxDistance then continue end
+
+        if not RaycastCheck(Camera.CFrame.Position, predictedPos) then continue end
+
+        if dist2D < closestDist then
+            closestDist = dist2D
+            closestPlayer = player
+        end
+    end
+
+    return closestPlayer
+end
+
+-- ============================================================
+-- SILENT AIM
+-- ============================================================
+local silentTarget = nil
+
+if Settings.SilentAim then
+    local mt = getrawmetatable and getrawmetatable(game)
+    if mt then
+        local oldIndex = mt.__index
+        local oldNamecall = mt.__namecall
+
+        setreadonly(mt, false)
+
+        mt.__namecall = newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            local args = {...}
+
+            if method == "FireServer" and Settings.SilentAim then
+                local target = GetClosestTarget()
+                if target then
+                    local char = GetCharacter(target)
+                    if char then
+                        local part = GetPart(char, Settings.SilentAimPart)
+                        if part then
+                            local predictedPos = PredictPosition(char, Settings.SilentAimPart)
+                            -- Replace aim position in fire args
+                            for i, v in ipairs(args) do
+                                if typeof(v) == "Vector3" then
+                                    args[i] = predictedPos or part.Position
+                                    break
+                                end
+                                if typeof(v) == "Instance" and v:IsA("BasePart") then
+                                    args[i] = part
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            return oldNamecall(self, table.unpack(args))
+        end)
+
+        setreadonly(mt, true)
+    end
+end
+
+-- ============================================================
+-- AIMBOT LOGIC
+-- ============================================================
+local aiming = false
+
+local function AimAt(player)
+    if not player then return end
+    local char = GetCharacter(player)
+    if not char then return end
+
+    local predictedPos = PredictPosition(char, Settings.AimPart)
+    if not predictedPos then return end
+
+    if Settings.AimSmoothing <= 0 then
+        Camera.CFrame = CFrame.new(Camera.CFrame.Position, predictedPos)
+    else
+        local currentLook = Camera.CFrame.LookVector
+        local targetLook = (predictedPos - Camera.CFrame.Position).Unit
+        local smoothed = currentLook:Lerp(targetLook, 1 / Settings.AimSmoothing)
+        Camera.CFrame = CFrame.new(Camera.CFrame.Position, Camera.CFrame.Position + smoothed)
+    end
+end
+
+-- ============================================================
+-- MOBILE GUI
+-- ============================================================
+local mobileGui = nil
+local mobileAimActive = false
+
+if isMobile and Settings.MobileEnabled then
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "RivalsAimbotMobile"
+    screenGui.ResetOnSpawn = false
+    screenGui.IgnoreGuiInset = true
+    screenGui.Parent = LocalPlayer.PlayerGui
+
+    mobileGui = screenGui
+
+    -- Toggle Button
+    local toggleBtn = Instance.new("TextButton")
+    toggleBtn.Size = UDim2.new(0, 90, 0, 45)
+    toggleBtn.Position = UDim2.new(0, 10, 0.5, -22)
+    toggleBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    toggleBtn.TextColor3 = Color3.fromRGB(255, 80, 80)
+    toggleBtn.Text = "AIM: ON"
+    toggleBtn.TextSize = 14
+    toggleBtn.Font = Enum.Font.GothamBold
+    toggleBtn.BorderSizePixel = 0
+    toggleBtn.Parent = screenGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = toggleBtn
+
+    -- Silent Aim Toggle
+    local silentBtn = Instance.new("TextButton")
+    silentBtn.Size = UDim2.new(0, 90, 0, 45)
+    silentBtn.Position = UDim2.new(0, 10, 0.5, 33)
+    silentBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    silentBtn.TextColor3 = Color3.fromRGB(80, 200, 255)
+    silentBtn.Text = "SILENT: ON"
+    silentBtn.TextSize = 13
+    silentBtn.Font = Enum.Font.GothamBold
+    silentBtn.BorderSizePixel = 0
+    silentBtn.Parent = screenGui
+
+    local corner2 = Instance.new("UICorner")
+    corner2.CornerRadius = UDim.new(0, 8)
+    corner2.Parent = silentBtn
+
+    toggleBtn.MouseButton1Click:Connect(function()
+        Settings.AimbotEnabled = not Settings.AimbotEnabled
+        toggleBtn.Text = Settings.AimbotEnabled and "AIM: ON" or "AIM: OFF"
+        toggleBtn.TextColor3 = Settings.AimbotEnabled
+            and Color3.fromRGB(255, 80, 80)
+            or Color3.fromRGB(120, 120, 120)
+    end)
+
+    silentBtn.MouseButton1Click:Connect(function()
+        Settings.SilentAim = not Settings.SilentAim
+        silentBtn.Text = Settings.SilentAim and "SILENT: ON" or "SILENT: OFF"
+        silentBtn.TextColor3 = Settings.SilentAim
+            and Color3.fromRGB(80, 200, 255)
+            or Color3.fromRGB(120, 120, 120)
+    end)
+end
+
+-- ============================================================
+-- INPUT HANDLING (PC)
+-- ============================================================
+if not isMobile then
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        if input.UserInputType == Settings.AimKey then
+            aiming = true
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Settings.AimKey then
+            aiming = false
+        end
+    end)
+end
+
+-- ============================================================
+-- MAIN LOOP
+-- ============================================================
+local lastMobileAim = 0
+
+RunService.RenderStepped:Connect(function()
+    -- Update FOV circle position (PC only)
+    if not isMobile and Settings.FOVEnabled then
+        local mousePos = UserInputService:GetMouseLocation()
+        FOVCircle.Position = mousePos
+        FOVCircle.Visible = true
+    end
+
+    -- Refresh highlights
+    RefreshHighlights()
+
+    -- PC Aimbot
+    if not isMobile then
+        if Settings.AimbotEnabled and aiming then
+            local target = GetClosestTarget()
+            if target then
+                AimAt(target)
+            end
+        end
+    else
+        -- Mobile auto aim
+        if Settings.AimbotEnabled and Settings.MobileAutoAim then
+            local now = tick()
+            if now - lastMobileAim >= Settings.MobileAimInterval then
+                lastMobileAim = now
+                local target = GetClosestTarget()
+                if target then
+                    AimAt(target)
+                end
+            end
+        end
+    end
+end)
+
+-- ============================================================
+-- CLEANUP
+-- ============================================================
+LocalPlayer.CharacterRemoving:Connect(function()
+    for _, player in ipairs(Players:GetPlayers()) do
+        RemoveHighlight(player)
+    end
+end)
+
+print("[Rivals Aimbot] Loaded | Mobile: " .. tostring(isMobile) .. " | Silent Aim: " .. tostring(Settings.SilentAim))
